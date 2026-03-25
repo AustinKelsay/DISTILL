@@ -1,56 +1,75 @@
 # Distill
 
-Distill is a local-first app for collecting, normalizing, indexing, tagging, labeling, and exporting personal LLM chat history.
+Distill is a local-first desktop app for collecting, normalizing, indexing, tagging, labeling, and exporting personal LLM chat history.
 
-The initial sources are:
+The first two local sources are:
 
 - OpenAI Codex CLI
 - Claude Code
 
-The core architectural idea is simple:
+The architectural line is deliberate:
 
 - source-specific connectors stay thin
+- Distill preserves raw captures from disk
 - Distill normalizes everything into one shared local model
-- raw captures are preserved
-- search, tagging, labeling, and export happen on standardized data
-
-## Runtime
-
-The current scaffold uses:
-
-- Electron
-- TypeScript
-- SQLite as the planned local database
-
-The app is desktop-first, but it keeps a small CLI surface for development and diagnostics.
+- search, curation, and export operate on standardized data
 
 ## Current Status
 
 Implemented now:
 
-- Electron + TypeScript project scaffold
+- Electron + TypeScript desktop scaffold
 - local source detection for Codex CLI and Claude Code
-- a shared `doctor` report builder
-- CLI doctor command
-- minimal Electron shell that can surface local source detection
-- documented discovery findings from this machine
-- documented schema draft and implementation blueprint
+- CLI `doctor` command
+- SQLite bootstrap from `schema.sql`
+- CLI `import` command
+- idempotent raw capture recording keyed by source path and SHA-256
+- normalized `sessions`, `messages`, and `artifacts` import
+- parser coverage for Codex archived sessions and Claude project sessions
+- basic dashboard query for recent sessions
+- session detail query and transcript read model
+- minimal Electron UI showing source health, recent sessions, and session detail
+- tests for doctor, parsing, import, and query behavior
 
 Not implemented yet:
 
-- SQLite bootstrap
-- capture discovery pipeline
-- raw capture import
-- normalization into sessions and messages
-- search
-- tags, labels, and export
+- interactive search UI over FTS
+- tags, labels, and export flows
+- background job processing beyond schema placeholders
 
-## Project Documents
+## Local Storage
 
-- [PLAN.md](/Users/plebdev/Desktop/code/DISTILL/PLAN.md): product plan and MVP scope
-- [DISCOVERY.md](/Users/plebdev/Desktop/code/DISTILL/DISCOVERY.md): verified local source locations, sample formats, and parser notes
-- [IMPLEMENTATION.md](/Users/plebdev/Desktop/code/DISTILL/IMPLEMENTATION.md): connector contract, normalized shapes, and implementation blueprint
-- [schema.sql](/Users/plebdev/Desktop/code/DISTILL/schema.sql): current SQLite schema draft
+By default Distill writes to:
+
+```text
+~/.distill/
+  distill.db
+  blobs/
+  imports/
+  exports/
+```
+
+Path overrides:
+
+- `DISTILL_HOME`: override the Distill working directory
+- `CODEX_HOME`: override the Codex data root
+- `CLAUDE_HOME`: override the Claude Code data root
+
+## Supported Sources
+
+Codex CLI:
+
+- detects the `codex` executable on `PATH`
+- reads archived sessions from `~/.codex/archived_sessions`
+- uses `session_index.jsonl` and `history.jsonl` as auxiliary metadata only
+
+Claude Code:
+
+- detects the `claude` executable on `PATH`
+- reads project session files from `~/.claude/projects`
+- uses `history.jsonl` as auxiliary metadata only
+
+Both connectors preserve raw records and derive user-facing transcript messages from filtered subsets of those event streams.
 
 ## Commands
 
@@ -60,16 +79,22 @@ Install dependencies:
 npm install
 ```
 
-Build the TypeScript project:
+Build the project:
 
 ```bash
 npm run build
 ```
 
-Run the local source doctor in the terminal:
+Scan local source health:
 
 ```bash
 npm run doctor
+```
+
+Import local captures into `~/.distill/distill.db`:
+
+```bash
+npm run import
 ```
 
 Run tests:
@@ -78,11 +103,32 @@ Run tests:
 npm test
 ```
 
-Start the Electron app:
+Launch the Electron app:
 
 ```bash
 npm start
 ```
+
+## Import Behavior
+
+The current importer:
+
+1. detects local sources
+2. discovers candidate capture files
+3. hashes each raw file
+4. skips captures already imported with the same `(source, path, sha256)`
+5. parses raw records
+6. upserts normalized sessions
+7. replaces normalized messages and artifacts for each imported session
+
+That means re-running `npm run import` is expected and safe. New or changed files import again; previously normalized identical captures are skipped.
+
+## Project Documents
+
+- [PLAN.md](/Users/plebdev/Desktop/code/DISTILL/PLAN.md): product direction and MVP definition
+- [DISCOVERY.md](/Users/plebdev/Desktop/code/DISTILL/DISCOVERY.md): verified local source locations, sample formats, and parser notes
+- [IMPLEMENTATION.md](/Users/plebdev/Desktop/code/DISTILL/IMPLEMENTATION.md): connector contract, normalized shapes, and ingest blueprint
+- [schema.sql](/Users/plebdev/Desktop/code/DISTILL/schema.sql): current SQLite schema
 
 ## Source Tree
 

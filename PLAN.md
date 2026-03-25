@@ -277,7 +277,7 @@ The initial user experience should be:
 1. Distill checks whether Codex CLI or Claude Code appear to be installed
 2. Distill scans likely local session paths
 3. Distill shows what it found
-4. user confirms import
+4. user runs or confirms import
 5. Distill ingests existing local history
 
 This is simpler and more reliable than asking the user to install a browser extension before any value exists.
@@ -448,12 +448,12 @@ Distill MVP is done when it can:
 
 ## Next Artifact
 
-The next high-leverage deliverable is:
+The next high-leverage deliverables after the current ingest spine are:
 
-- a concrete `CapturePayload` spec
-- the initial SQLite schema
-- a source discovery spec for Codex CLI and Claude Code
-- the first direct local ingest pipeline
+- search over normalized data using the existing FTS table
+- manual curation flows for tags and labels
+- first JSONL export path for labeled sessions
+- richer artifact and raw-capture inspection in the UI
 
 ## Current Foundation
 
@@ -461,6 +461,10 @@ Already in place:
 
 - Electron + TypeScript scaffold
 - local source doctor for Codex CLI and Claude Code
+- direct import pipeline for Codex and Claude local session files
+- normalized `sessions`, `messages`, and `artifacts` persistence
+- recent-session dashboard query and session detail UI
+- test coverage for doctor, parse, import, and query flows
 - discovery notes from this machine
-- schema draft
+- SQLite schema
 - implementation blueprint

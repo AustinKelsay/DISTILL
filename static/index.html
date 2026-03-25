@@ -79,9 +79,11 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
         gap: 20px;
+        margin-bottom: 20px;
       }
 
       .source-card {
+        overflow: hidden;
         background: rgba(251, 248, 241, 0.88);
         border: 1px solid var(--line);
         border-radius: 24px;
@@ -200,6 +202,161 @@
         font-family: "Menlo", "Monaco", monospace;
       }
 
+      .section-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 16px;
+        margin: 28px 0 16px;
+      }
+
+      .section-head h2 {
+        font-size: 28px;
+      }
+
+      .section-head p {
+        color: var(--muted);
+        max-width: 560px;
+      }
+
+      .sessions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 18px;
+        margin-bottom: 26px;
+      }
+
+      .session-card {
+        background: rgba(255, 251, 245, 0.78);
+        border: 1px solid rgba(216, 207, 191, 0.9);
+        border-radius: 22px;
+        padding: 20px;
+        box-shadow: 0 10px 28px rgba(40, 31, 20, 0.06);
+        cursor: pointer;
+        transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+      }
+
+      .session-card:hover,
+      .session-card.selected {
+        transform: translateY(-2px);
+        border-color: rgba(23, 92, 76, 0.32);
+        box-shadow: 0 16px 34px rgba(23, 92, 76, 0.12);
+      }
+
+      .session-header,
+      .session-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .session-card h3 {
+        font-size: 22px;
+        line-height: 1.15;
+        margin: 14px 0 10px;
+      }
+
+      .session-project,
+      .session-preview {
+        color: var(--muted);
+      }
+
+      .session-project {
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+
+      .session-preview {
+        font-size: 15px;
+        line-height: 1.5;
+        min-height: 4.5em;
+      }
+
+      .session-meta {
+        flex-wrap: wrap;
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid rgba(216, 207, 191, 0.8);
+      }
+
+      .session-meta div {
+        min-width: 120px;
+      }
+
+      .detail-empty,
+      .detail-shell {
+        background: rgba(251, 248, 241, 0.9);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 24px;
+        box-shadow: 0 14px 42px rgba(40, 31, 20, 0.08);
+      }
+
+      .detail-head,
+      .detail-meta,
+      .message-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      .detail-project {
+        margin-top: 10px;
+        color: var(--muted);
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 13px;
+      }
+
+      .detail-summary {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .detail-meta {
+        flex-wrap: wrap;
+        margin: 18px 0 0;
+        padding: 18px 0;
+        border-top: 1px solid rgba(216, 207, 191, 0.8);
+        border-bottom: 1px solid rgba(216, 207, 191, 0.8);
+      }
+
+      .detail-meta div {
+        min-width: 160px;
+      }
+
+      .message-list {
+        display: grid;
+        gap: 14px;
+        margin-top: 18px;
+        max-height: 540px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+
+      .message-row {
+        border: 1px solid rgba(216, 207, 191, 0.84);
+        border-radius: 18px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.55);
+      }
+
+      .message-row.user {
+        border-left: 4px solid #175c4c;
+      }
+
+      .message-row.assistant {
+        border-left: 4px solid #86551f;
+      }
+
+      .message-row p {
+        white-space: pre-wrap;
+        line-height: 1.55;
+        margin-top: 12px;
+      }
+
       @media (max-width: 720px) {
         main {
           padding: 28px 16px 36px;
@@ -207,7 +364,13 @@
 
         .source-header,
         .check-row,
-        .meta-grid {
+        .meta-grid,
+        .session-header,
+        .session-meta,
+        .section-head,
+        .detail-head,
+        .detail-meta,
+        .message-meta {
           flex-direction: column;
         }
 
@@ -228,6 +391,38 @@
           inspect Codex CLI and Claude Code before ingest begins.
         </p>
         <p class="scanned-at">Last scan: <span data-scanned-at>Loading...</span></p>
+      </section>
+
+      <section class="section-head">
+        <div>
+          <p class="eyebrow">Sessions</p>
+          <h2>Recent normalized conversations</h2>
+        </div>
+        <p>
+          This is the first real Distill read model: sessions coming out of the shared
+          normalized database instead of raw source folders.
+        </p>
+      </section>
+
+      <section class="sessions" data-sessions></section>
+
+      <section class="section-head">
+        <div>
+          <p class="eyebrow">Transcript</p>
+          <h2>Session detail</h2>
+        </div>
+        <p>
+          Read the normalized conversation directly from Distill’s local database.
+        </p>
+      </section>
+
+      <section data-session-detail></section>
+
+      <section class="section-head">
+        <div>
+          <p class="eyebrow">Sources</p>
+          <h2>Local source health</h2>
+        </div>
       </section>
 
       <section class="sources" data-sources></section>

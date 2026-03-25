@@ -13,6 +13,8 @@ Both target tools are installed on this machine and both already store usable lo
 
 That means the Distill MVP can begin with direct local ingestion and does not need a browser capture path.
 
+This discovery pass is machine-specific and date-specific. The exact file counts below were accurate on 2026-03-25 on this workstation.
+
 ## Source Locations
 
 ### Codex CLI
@@ -345,6 +347,16 @@ Use the same high-level pipeline for both sources:
 6. derive normalized messages from user-visible text blocks only
 7. extract artifacts separately
 8. retain provider-specific metadata in JSON columns
+
+## Import Implications
+
+The current codebase aligns with this discovery pass in a few important ways:
+
+- archived session files are treated as the source of truth for Codex imports
+- Claude project JSONL files are treated as the source of truth for Claude imports
+- auxiliary history files are used only for metadata enrichment, not transcript reconstruction
+- provider noise such as reasoning, progress, and tool traffic is preserved as raw records even when excluded from normalized message text
+- the importer can safely re-scan these directories because capture dedupe is based on source path plus raw file hash
 
 ## Final Schema Direction
 

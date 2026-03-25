@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 export function expandHome(inputPath: string): string {
   if (!inputPath.startsWith("~/")) {
@@ -41,6 +42,10 @@ export function countFiles(targetPath: string): number {
   return total;
 }
 
+export function countFilesMatching(targetPath: string, predicate: (filePath: string) => boolean): number {
+  return listFilesRecursive(targetPath).filter(predicate).length;
+}
+
 export function findExecutable(binaryName: string): string | undefined {
   const envPath = process.env.PATH;
   if (!envPath) {
@@ -58,4 +63,43 @@ export function findExecutable(binaryName: string): string | undefined {
   }
 
   return undefined;
+}
+
+export function ensureDirectory(targetPath: string): void {
+  fs.mkdirSync(targetPath, { recursive: true });
+}
+
+export function listFilesRecursive(targetPath: string): string[] {
+  if (!fs.existsSync(targetPath)) {
+    return [];
+  }
+
+  const stat = fs.statSync(targetPath);
+  if (stat.isFile()) {
+    return [targetPath];
+  }
+
+  const results: string[] = [];
+  for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
+    const childPath = path.join(targetPath, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...listFilesRecursive(childPath));
+    } else {
+      results.push(childPath);
+    }
+  }
+
+  return results.sort();
+}
+
+export function getFileSha256(filePath: string): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest("hex");
+}
+
+export function getTextSha1(text: string): string {
+  const hash = crypto.createHash("sha1");
+  hash.update(text);
+  return hash.digest("hex");
 }

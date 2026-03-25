@@ -1,9 +1,10 @@
-import { countFiles, expandHome, findExecutable, pathExists } from "../../distill/fs";
+import { countFiles, countFilesMatching, findExecutable, pathExists } from "../../distill/fs";
+import { getClaudeHome } from "../../distill/paths";
 import { DiscoveredSource, SourcePathCheck } from "../../shared/types";
 
 export function detectClaudeCodeSource(): DiscoveredSource {
   const executablePath = findExecutable("claude");
-  const dataRoot = expandHome("~/.claude");
+  const dataRoot = getClaudeHome();
   const projectsPath = `${dataRoot}/projects`;
   const history = `${dataRoot}/history.jsonl`;
   const settings = `${dataRoot}/settings.json`;
@@ -18,7 +19,7 @@ export function detectClaudeCodeSource(): DiscoveredSource {
       label: "projects",
       path: projectsPath,
       exists: pathExists(projectsPath),
-      fileCount: countFiles(projectsPath)
+      fileCount: countFilesMatching(projectsPath, (filePath) => filePath.endsWith(".jsonl"))
     },
     {
       label: "history",

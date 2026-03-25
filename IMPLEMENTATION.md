@@ -51,8 +51,16 @@ Implemented now:
 - Claude Code source detection
 - shared doctor report
 - CLI doctor command
+- SQLite bootstrap from `schema.sql`
+- raw capture discovery for Codex archived sessions
+- raw capture discovery for Claude project sessions
+- CLI import command with idempotent capture recording
+- raw `capture_records` persistence
+- normalized `sessions` import
+- normalized `messages` import
+- basic artifact extraction for Claude Code image and tool blocks
 
-This means the project already has a working source-discovery spine, even though ingest and SQLite are not wired yet.
+This means the project already has a working source-discovery, raw-capture, and first normalized-ingest spine.
 
 ## Shared Distill Shapes
 
@@ -89,6 +97,7 @@ type DiscoveredCapture = {
   externalSessionId?: string;
   sourceModifiedAt?: string;
   sourceSizeBytes?: number;
+  metadata: Record<string, unknown>;
 };
 ```
 
@@ -116,6 +125,7 @@ type NormalizedSession = {
 
 ```ts
 type NormalizedMessage = {
+  sourceLineNo: number;
   externalMessageId?: string;
   parentExternalMessageId?: string;
   role: "user" | "assistant" | "system" | "tool";
@@ -130,11 +140,11 @@ type NormalizedMessage = {
 
 ```ts
 type NormalizedArtifact = {
+  sourceLineNo: number;
   externalMessageId?: string;
   kind: "image" | "file" | "tool_call" | "tool_result" | "raw_json";
   mimeType?: string;
-  sourcePath?: string;
-  payload?: Record<string, unknown>;
+  payload: Record<string, unknown>;
 };
 ```
 
@@ -189,6 +199,12 @@ Connectors should not:
 - update search indexes themselves
 
 They only discover and normalize.
+
+In the current codebase this contract is implemented as plain functions rather than a formal shared interface type, but the responsibility split is the same:
+
+- `detect*Source()`
+- `discover*Captures()`
+- `parse*Capture()`
 
 ## Shared Ingest Pipeline
 
@@ -353,50 +369,54 @@ The storage layer should expose a small set of operations:
 
 - `upsertSource`
 - `insertCapture`
+- `findCapture`
+- `updateCaptureStatus`
 - `insertCaptureRecords`
 - `upsertSession`
-- `replaceOrUpsertMessages`
-- `insertArtifacts`
+- `replaceSessionMessages`
+- `replaceSessionArtifacts`
 - `appendActivityEvent`
 - `enqueueJob`
 
-This prevents connector code from growing database logic everywhere.
+The current implementation already follows most of this split in `src/distill/db.ts`. Connectors still stay out of SQLite entirely, and the import pipeline remains the only place that coordinates database writes.
 
 ## Initial Module Boundaries
 
-The first implementation can be organized like this:
+The current repository is organized like this:
 
 ```text
 src/
   distill/
-    types.ts
-    ingest.ts
-    hashing.ts
-    blobs.ts
     db.ts
-    schema.ts
+    doctor.ts
+    fs.ts
+    import.ts
+    jsonl.ts
+    paths.ts
+    query.ts
   connectors/
     codex/
       detect.ts
       discover.ts
       parse.ts
-      normalize.ts
     claude_code/
       detect.ts
       discover.ts
       parse.ts
-      normalize.ts
   cli/
-    main.ts
-    commands/
-      doctor.ts
-      sources.ts
-      import.ts
+    doctor.ts
+    import.ts
+  electron/
+  renderer/
+  shared/
+  test/
 ```
 
 ## First CLI Surface
 
-Keep the first CLI very small:
+Keep the first CLI very small.
+
+Implemented now:
 
 ### `distill doctor`
 
@@ -407,10 +427,6 @@ Shows:
 - whether local data roots exist
 - how many candidate capture files were found
 
-### `distill sources`
-
-Shows discovered source metadata and local paths.
-
 ### `distill import`
 
 Runs:
@@ -419,6 +435,11 @@ Runs:
 - capture discovery
 - ingest
 - summary output
+
+Not implemented yet:
+
+- `distill sources`
+- query, export, or maintenance commands
 
 ## Milestone Order
 
@@ -452,27 +473,27 @@ Build:
 Build:
 
 - FTS indexing
-- simple query layer
+- search and richer query layer
 - export of `train` labeled sessions
 
 ## Open Decisions
 
-These are the only meaningful design choices still open before coding:
+These are the meaningful design choices still open:
 
-- runtime: Node/TypeScript vs another local-first stack
 - whether to store full raw file contents in blobs always or only for large files
-- whether message replacement should be full-session rewrite or row-level upsert during re-import
+- whether message replacement should stay full-session rewrite or move to row-level upsert during re-import
+- how much job processing should happen inline versus asynchronously once search/tagging land
 
-None of those block implementation planning. They only affect ergonomics.
+The runtime choice is no longer open in practice. The repo is already committed to Electron + TypeScript + SQLite for the current implementation.
 
 ## Recommended Immediate Next Step
 
-The runtime and initial project skeleton are now chosen and implemented, and `distill doctor` already works.
+The runtime and initial project skeleton are chosen and implemented, `distill doctor` works, and `distill import` already persists normalized sessions.
 
 So the next actual coding step is:
 
-1. wire `schema.sql` into a DB bootstrap
-2. add capture discovery
-3. implement the Codex importer
-4. implement the Claude importer
-5. connect the Electron shell to real import state
+1. add search over normalized data
+2. enrich artifact handling and metadata extraction
+3. add tagging, labeling, and export flows
+4. grow the Electron UI beyond session list/detail into real curation flows
+5. introduce background jobs where synchronous import becomes too heavy

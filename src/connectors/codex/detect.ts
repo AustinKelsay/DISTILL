@@ -1,9 +1,10 @@
-import { countFiles, expandHome, findExecutable, pathExists } from "../../distill/fs";
+import { countFiles, countFilesMatching, findExecutable, pathExists } from "../../distill/fs";
+import { getCodexHome } from "../../distill/paths";
 import { DiscoveredSource, SourcePathCheck } from "../../shared/types";
 
 export function detectCodexSource(): DiscoveredSource {
   const executablePath = findExecutable("codex");
-  const dataRoot = expandHome("~/.codex");
+  const dataRoot = getCodexHome();
   const archivedSessions = `${dataRoot}/archived_sessions`;
   const sessionIndex = `${dataRoot}/session_index.jsonl`;
   const history = `${dataRoot}/history.jsonl`;
@@ -18,7 +19,7 @@ export function detectCodexSource(): DiscoveredSource {
       label: "archived_sessions",
       path: archivedSessions,
       exists: pathExists(archivedSessions),
-      fileCount: countFiles(archivedSessions)
+      fileCount: countFilesMatching(archivedSessions, (filePath) => filePath.endsWith(".jsonl"))
     },
     {
       label: "session_index",

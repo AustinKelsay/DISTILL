@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "npm run build && electron .",
     "doctor": "npm run build && node dist/cli/doctor.js",
+    "import": "npm run build && node dist/cli/import.js",
     "test": "npm run build && node --test dist/test/*.test.js"
   },
   "devDependencies": {
