@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Distill</title>
+    <style>
+      :root {
+        --bg: #f2efe8;
+        --panel: #fbf8f1;
+        --ink: #1f1b17;
+        --muted: #6a625a;
+        --line: #d8cfbf;
+        --accent: #175c4c;
+        --warn: #86551f;
+        --ok-bg: #d9eee5;
+        --miss-bg: #f6dfcb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(23, 92, 76, 0.12), transparent 28%),
+          linear-gradient(180deg, #f7f3ea 0%, var(--bg) 100%);
+      }
+
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 48px 28px 56px;
+      }
+
+      .hero {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 28px;
+      }
+
+      .eyebrow {
+        margin: 0;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 12px;
+        font-family: "Menlo", "Monaco", monospace;
+      }
+
+      h1, h2, p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(36px, 6vw, 68px);
+        line-height: 0.95;
+        max-width: 9ch;
+      }
+
+      .lede {
+        max-width: 760px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.5;
+      }
+
+      .scanned-at {
+        margin-top: 8px;
+        font-size: 14px;
+        color: var(--muted);
+        font-family: "Menlo", "Monaco", monospace;
+      }
+
+      .sources {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 20px;
+      }
+
+      .source-card {
+        background: rgba(251, 248, 241, 0.88);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 22px;
+        box-shadow: 0 14px 42px rgba(40, 31, 20, 0.08);
+        backdrop-filter: blur(10px);
+      }
+
+      .source-header,
+      .check-row,
+      .meta-grid {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .source-header {
+        align-items: start;
+        margin-bottom: 18px;
+      }
+
+      .status,
+      .pill {
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        font-family: "Menlo", "Monaco", monospace;
+      }
+
+      .status.installed,
+      .pill.ok {
+        background: var(--ok-bg);
+        color: var(--accent);
+      }
+
+      .status.partial {
+        background: #f5e4c9;
+        color: var(--warn);
+      }
+
+      .status.not_found,
+      .pill.missing {
+        background: var(--miss-bg);
+        color: #8d3a1d;
+      }
+
+      .meta-grid {
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+        padding-bottom: 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .meta-grid div {
+        min-width: 240px;
+      }
+
+      dt {
+        margin-bottom: 6px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-family: "Menlo", "Monaco", monospace;
+      }
+
+      dd {
+        margin: 0;
+        word-break: break-word;
+      }
+
+      .checks {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 12px;
+      }
+
+      .check-row {
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(216, 207, 191, 0.7);
+      }
+
+      .check-row:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+
+      .check-label {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-family: "Menlo", "Monaco", monospace;
+        margin-bottom: 4px;
+      }
+
+      .check-path {
+        word-break: break-word;
+      }
+
+      .check-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+      }
+
+      .count {
+        color: var(--muted);
+        font-size: 13px;
+        font-family: "Menlo", "Monaco", monospace;
+      }
+
+      @media (max-width: 720px) {
+        main {
+          padding: 28px 16px 36px;
+        }
+
+        .source-header,
+        .check-row,
+        .meta-grid {
+          flex-direction: column;
+        }
+
+        .check-meta {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Distill</p>
+        <h1>Local memory for your coding chats.</h1>
+        <p class="lede">
+          Electron + TypeScript scaffold. The first screen is intentionally simple:
+          verify local sources, show where their history lives, and prove Distill can
+          inspect Codex CLI and Claude Code before ingest begins.
+        </p>
+        <p class="scanned-at">Last scan: <span data-scanned-at>Loading...</span></p>
+      </section>
+
+      <section class="sources" data-sources></section>
+    </main>
+
+    <script src="../dist/renderer/app.js"></script>
+  </body>
+</html>
