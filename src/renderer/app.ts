@@ -8,6 +8,7 @@ import {
   SessionLabel,
   SessionListItem
 } from "../shared/types";
+import { escapeHtml } from "../shared/html";
 
 declare global {
   interface Window {
@@ -45,8 +46,8 @@ function renderSource(source: DiscoveredSource): string {
       return `
         <li class="check-row">
           <div>
-            <div class="check-label">${check.label}</div>
-            <div class="check-path">${check.path}</div>
+            <div class="check-label">${escapeHtml(check.label)}</div>
+            <div class="check-path">${escapeHtml(check.path)}</div>
           </div>
           <div class="check-meta">
             <span class="pill ${statusClass}">${statusLabel}</span>
@@ -61,19 +62,19 @@ function renderSource(source: DiscoveredSource): string {
     <section class="source-card">
       <div class="source-header">
         <div>
-          <p class="eyebrow">${source.kind}</p>
-          <h2>${source.displayName}</h2>
+          <p class="eyebrow">${escapeHtml(source.kind)}</p>
+          <h2>${escapeHtml(source.displayName)}</h2>
         </div>
         <span class="status ${source.installStatus}">${source.installStatus.replace("_", " ")}</span>
       </div>
       <dl class="meta-grid">
         <div>
           <dt>Executable</dt>
-          <dd>${source.executablePath ?? "Not found"}</dd>
+          <dd>${escapeHtml(source.executablePath ?? "Not found")}</dd>
         </div>
         <div>
           <dt>Data Root</dt>
-          <dd>${source.dataRoot ?? "Unknown"}</dd>
+          <dd>${escapeHtml(source.dataRoot ?? "Unknown")}</dd>
         </div>
       </dl>
       <ul class="checks">${checks}</ul>
@@ -91,21 +92,21 @@ function renderSession(session: SessionListItem): string {
         <span class="pill ok">${session.sourceKind}</span>
         <span class="count">${session.messageCount} msgs</span>
       </div>
-      <h3>${session.title}</h3>
-      <p class="session-project">${session.projectPath ?? "Unknown project"}</p>
-      <p class="session-preview">${preview}</p>
+      <h3>${escapeHtml(session.title)}</h3>
+      <p class="session-project">${escapeHtml(session.projectPath ?? "Unknown project")}</p>
+      <p class="session-preview">${escapeHtml(preview)}</p>
       <dl class="session-meta">
         <div>
           <dt>Updated</dt>
-          <dd>${updatedAt}</dd>
+          <dd>${escapeHtml(updatedAt)}</dd>
         </div>
         <div>
           <dt>Model</dt>
-          <dd>${session.model ?? "Unknown"}</dd>
+          <dd>${escapeHtml(session.model ?? "Unknown")}</dd>
         </div>
         <div>
           <dt>Branch</dt>
-          <dd>${session.gitBranch ?? "Unknown"}</dd>
+          <dd>${escapeHtml(session.gitBranch ?? "Unknown")}</dd>
         </div>
       </dl>
     </article>
@@ -121,9 +122,9 @@ function renderSearchResult(result: SearchResult): string {
         <span class="pill ok">${result.sourceKind}</span>
         <span class="count">${updatedAt}</span>
       </div>
-      <h3>${result.title}</h3>
-      <p class="session-project">${result.projectPath ?? "Unknown project"}</p>
-      <p class="session-preview">${result.snippet}</p>
+      <h3>${escapeHtml(result.title)}</h3>
+      <p class="session-project">${escapeHtml(result.projectPath ?? "Unknown project")}</p>
+      <p class="session-preview">${escapeHtml(result.snippet)}</p>
     </article>
   `;
 }
@@ -152,7 +153,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
         .map(
           (tag) => `
             <button class="tag-chip" data-remove-tag-id="${tag.id}" type="button">
-              #${tag.name}
+              #${escapeHtml(tag.name)}
             </button>
           `
         )
@@ -166,7 +167,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
       const active = activeLabels.has(labelName);
       return `
         <button class="label-chip ${active ? "active" : ""}" data-toggle-label="${labelName}" type="button">
-          ${labelName}
+          ${escapeHtml(labelName)}
         </button>
       `;
     })
@@ -180,9 +181,9 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
           <div class="message-meta">
             <span class="pill ok">${message.role}</span>
             <span class="count">#${message.ordinal}</span>
-            <span class="count">${createdAt}</span>
+            <span class="count">${escapeHtml(createdAt)}</span>
           </div>
-          <p>${message.text}</p>
+          <p>${escapeHtml(message.text)}</p>
         </article>
       `;
     })
@@ -193,8 +194,8 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
       <div class="detail-head">
         <div>
           <p class="eyebrow">Session Detail</p>
-          <h2>${detail.title}</h2>
-          <p class="detail-project">${detail.projectPath ?? "Unknown project"}</p>
+          <h2>${escapeHtml(detail.title)}</h2>
+          <p class="detail-project">${escapeHtml(detail.projectPath ?? "Unknown project")}</p>
         </div>
         <div class="detail-summary">
           <span class="pill ok">${detail.sourceKind}</span>
@@ -205,15 +206,15 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
       <dl class="detail-meta">
         <div>
           <dt>Updated</dt>
-          <dd>${detail.updatedAt ? new Date(detail.updatedAt).toLocaleString() : "Unknown"}</dd>
+          <dd>${escapeHtml(detail.updatedAt ? new Date(detail.updatedAt).toLocaleString() : "Unknown")}</dd>
         </div>
         <div>
           <dt>Model</dt>
-          <dd>${detail.model ?? "Unknown"}</dd>
+          <dd>${escapeHtml(detail.model ?? "Unknown")}</dd>
         </div>
         <div>
           <dt>Branch</dt>
-          <dd>${detail.gitBranch ?? "Unknown"}</dd>
+          <dd>${escapeHtml(detail.gitBranch ?? "Unknown")}</dd>
         </div>
       </dl>
       <section class="curation-block">

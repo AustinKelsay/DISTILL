@@ -1,6 +1,12 @@
 import { buildDoctorReport } from "../distill/doctor";
 import { DiscoveredSource } from "../shared/types";
 
+function printHelp(): void {
+  console.log("Usage: npm run doctor");
+  console.log("");
+  console.log("Reports install and data-root health for the supported local sources.");
+}
+
 function formatSource(source: DiscoveredSource): string {
   const lines = [
     `${source.displayName} [${source.kind}]`,
@@ -19,6 +25,11 @@ function formatSource(source: DiscoveredSource): string {
 }
 
 function main(): void {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    printHelp();
+    return;
+  }
+
   const report = buildDoctorReport();
 
   console.log(`Distill doctor scan at ${report.scannedAt}\n`);

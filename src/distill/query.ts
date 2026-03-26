@@ -90,10 +90,9 @@ function deriveSessionPreview(row: SessionRow): string | undefined {
 }
 
 function normalizeSearchQuery(query: string): string {
-  return query
-    .trim()
-    .replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
-    .replace(/\s+/g, " ");
+  const tokens = query.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+
+  return tokens.map((token) => `"${token.replace(/"/g, "\"\"")}"`).join(" AND ");
 }
 
 export function listRecentSessions(limit = 24): SessionListItem[] {
