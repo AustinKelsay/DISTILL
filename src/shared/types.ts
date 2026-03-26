@@ -116,6 +116,18 @@ export type ExportReport = {
   recordCount: number;
 };
 
+export type BackgroundSyncStatus = {
+  state: "idle" | "running" | "completed" | "failed";
+  jobId?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  discoveredCaptures: number;
+  importedCaptures: number;
+  skippedCaptures: number;
+  summary: string;
+  errorText?: string;
+};
+
 export type SessionListItem = {
   id: number;
   sourceKind: SourceKind;
@@ -164,6 +176,19 @@ export type SessionDetailMessage = {
   createdAt?: string;
 };
 
+export type SessionArtifact = {
+  id: number;
+  kind: string;
+  mimeType?: string;
+  sourceLineNo?: number;
+  messageOrdinal?: number;
+  messageRole?: string;
+  createdAt?: string;
+  summary: string;
+  payloadPreview: string;
+  payloadJson: string;
+};
+
 export type SessionDetail = {
   id: number;
   sourceKind: SourceKind;
@@ -177,5 +202,6 @@ export type SessionDetail = {
   artifactCount: number;
   tags: SessionTag[];
   labels: SessionLabel[];
+  artifacts: SessionArtifact[];
   messages: SessionDetailMessage[];
 };

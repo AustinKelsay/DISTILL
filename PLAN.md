@@ -1,5 +1,7 @@
 # Distill Plan
 
+Branding note: the final `L` in `DISTILL` stands for `locally`.
+
 ## Product Direction
 
 Distill should start ruthlessly simple and local-first:

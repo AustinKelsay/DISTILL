@@ -86,7 +86,33 @@
 
       .topbar-actions {
         display: flex;
+        align-items: center;
         gap: 6px;
+      }
+
+      .topbar-sync {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        border: 1px solid var(--card-border);
+        border-radius: 999px;
+        padding: 4px 8px;
+        background: var(--card);
+      }
+
+      .topbar-sync[data-state="running"] {
+        color: var(--warn);
+        border-color: rgba(212, 148, 74, 0.35);
+      }
+
+      .topbar-sync[data-state="completed"] {
+        color: var(--accent);
+        border-color: rgba(61, 191, 154, 0.35);
+      }
+
+      .topbar-sync[data-state="failed"] {
+        color: #d46a4a;
+        border-color: rgba(212, 106, 74, 0.35);
       }
 
       .btn {
@@ -315,6 +341,70 @@
         gap: 2px;
       }
 
+      .section-title {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 10px;
+      }
+
+      .artifact-list {
+        padding: 14px 20px 4px;
+        border-bottom: 1px solid rgba(58, 58, 62, 0.5);
+      }
+
+      .artifact-card {
+        border: 1px solid rgba(58, 58, 62, 0.65);
+        background: rgba(34, 34, 38, 0.65);
+        border-radius: 8px;
+        margin-bottom: 10px;
+        overflow: hidden;
+      }
+
+      .artifact-card summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 10px 12px;
+      }
+
+      .artifact-card summary::-webkit-details-marker { display: none; }
+
+      .artifact-title {
+        font-weight: 600;
+        margin-bottom: 5px;
+      }
+
+      .artifact-meta {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--dim);
+        margin-bottom: 6px;
+      }
+
+      .artifact-preview {
+        color: var(--muted);
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .artifact-payload {
+        margin: 0;
+        padding: 12px;
+        border-top: 1px solid rgba(58, 58, 62, 0.5);
+        background: rgba(26, 26, 30, 0.65);
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.5;
+        overflow-x: auto;
+      }
+
       .msg {
         padding: 10px 14px;
         line-height: 1.55;
@@ -482,6 +572,8 @@
       />
       <div class="topbar-stats" data-stats></div>
       <div class="topbar-actions">
+        <span class="topbar-sync" data-sync-status data-state="idle">idle</span>
+        <button class="btn" data-sync-now>↻ sync</button>
         <button class="btn" data-export-label="train">↑ train</button>
         <button class="btn" data-export-label="holdout">↑ holdout</button>
         <button class="btn" data-export-label="favorite">↑ fav</button>
@@ -492,7 +584,7 @@
       <h3>No sessions found</h3>
       <p>
         Distill reads conversations from <strong>Codex CLI</strong> and <strong>Claude Code</strong>.
-        Run <code>npm run import</code> to scan and ingest your local history.
+        The desktop app syncs local history on launch and in the background.
       </p>
     </div>
 

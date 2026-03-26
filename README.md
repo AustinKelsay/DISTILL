@@ -2,6 +2,8 @@
 
 Distill is a local-first desktop app for collecting, normalizing, indexing, tagging, labeling, and exporting personal LLM chat history.
 
+Branding note: the final `L` in `DISTILL` stands for `locally`.
+
 The first two local sources are:
 
 - OpenAI Codex CLI
@@ -32,13 +34,14 @@ Implemented now:
 - session detail query and transcript read model
 - manual session tags and labels
 - labeled JSONL export
-- minimal Electron UI showing source health, recent sessions, search, session detail, curation controls, and export actions
+- minimal Electron UI showing source health, recent sessions, search, session detail, curation controls, artifact inspection, sync status, and export actions
+- startup and interval-based background sync jobs for local source refresh
 - tests for doctor, parsing, import, query, and export behavior
 
 Not implemented yet:
 
-- background job processing beyond schema placeholders
-- richer artifact browsing in the Electron UI
+- background work beyond local source sync
+- richer artifact rendering beyond structured metadata and JSON payload inspection
 
 ## Local Storage
 
@@ -131,6 +134,8 @@ Launch the Electron app:
 ```bash
 npm start
 ```
+
+`npm start` runs a fresh import before opening the window, so local source changes show up automatically on launch.
 
 ## Import Behavior
 

@@ -157,6 +157,65 @@ test("query layer returns session tags and labels after manual curation", () => 
   });
 });
 
+test("query layer returns artifact summaries for session detail", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'claude_code', 'Claude Code', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (40, 1, 'session-4', 'Artifact session', '/tmp/demo', '2026-03-25T15:00:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO captures (
+        id, source_id, capture_kind, source_path, raw_sha256, parser_version, status, captured_at
+      ) VALUES (1, 1, 'project_session', '/tmp/demo/session.jsonl', 'sha', 'v0', 'normalized', '2026-03-25T15:00:00Z')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO capture_records (
+        id, capture_id, line_no, record_type, provider_message_id, role, is_meta, content_json, metadata_json
+      ) VALUES (500, 1, 8, 'assistant', 'msg-1', 'assistant', 0, '{}', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, capture_record_id, external_message_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (200, 40, 500, 'msg-1', 1, 'assistant', 'Running tool', 'hash-1', '2026-03-25T15:00:00Z', 'text', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO artifacts (
+        session_id, capture_record_id, kind, mime_type, metadata_json, created_at
+      ) VALUES
+      (40, 500, 'tool_call', NULL, ?, '2026-03-25T15:00:01Z')
+    `).run(JSON.stringify({
+      type: "tool_use",
+      name: "Read",
+      input: {
+        file_path: "/tmp/demo/src/app.ts"
+      }
+    }));
+
+    const detail = getSessionDetail(40);
+    assert.equal(detail?.artifacts.length, 1);
+    assert.equal(detail?.artifacts[0]?.summary, "Tool call: Read");
+    assert.match(detail?.artifacts[0]?.payloadJson ?? "", /file_path/);
+    assert.equal(detail?.artifacts[0]?.messageOrdinal, 1);
+
+    distillDb.close();
+  });
+});
+
 test("escapeHtml encodes transcript text before renderer interpolation", () => {
   assert.equal(
     escapeHtml(`<script>alert("x")</script> & 'quoted'`),

@@ -1,11 +1,12 @@
 import {
+  BackgroundSyncStatus,
   DashboardData,
   DoctorReport,
   DiscoveredSource,
   ExportReport,
   SearchResult,
+  SessionArtifact,
   SessionDetail,
-  SessionLabel,
   SessionListItem
 } from "../shared/types";
 import { escapeHtml } from "../shared/html";
@@ -22,6 +23,9 @@ declare global {
       toggleSessionLabel: (sessionId: number, labelName: string) => void;
       getDefaultLabelNames: () => string[];
       exportSessionsByLabel: (label: string) => ExportReport;
+      getBackgroundSyncStatus: () => Promise<BackgroundSyncStatus>;
+      requestBackgroundSync: () => Promise<BackgroundSyncStatus>;
+      onBackgroundSyncStatus: (listener: (status: BackgroundSyncStatus) => void) => () => void;
     };
   }
 }
@@ -29,6 +33,7 @@ declare global {
 let dashboardData: DashboardData | null = null;
 let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
+let syncStatusUnsubscribe: (() => void) | null = null;
 
 /* Helpers */
 
@@ -52,6 +57,21 @@ function showExportToast(message: string): void {
   el.classList.add("visible");
   if (exportTimeout) clearTimeout(exportTimeout);
   exportTimeout = setTimeout(() => el.classList.remove("visible"), 4000);
+}
+
+function renderSyncStatus(status: BackgroundSyncStatus): void {
+  const el = document.querySelector<HTMLElement>("[data-sync-status]");
+  if (!el) return;
+
+  const text =
+    status.state === "running" ? "syncing..."
+    : status.state === "failed" ? "sync failed"
+    : status.finishedAt ? `synced ${timeAgo(status.finishedAt)}`
+    : "idle";
+
+  el.textContent = text;
+  el.title = status.errorText ?? status.summary;
+  el.dataset.state = status.state;
 }
 
 /* Sources */
@@ -111,6 +131,27 @@ function renderSearchItem(result: SearchResult): string {
   `;
 }
 
+function renderArtifact(artifact: SessionArtifact): string {
+  const metaBits = [
+    artifact.kind,
+    artifact.mimeType,
+    typeof artifact.messageOrdinal === "number" ? `msg #${artifact.messageOrdinal}` : undefined,
+    typeof artifact.sourceLineNo === "number" ? `line ${artifact.sourceLineNo}` : undefined,
+    artifact.createdAt ? timeAgo(artifact.createdAt) : undefined
+  ].filter(Boolean).map((part) => `<span>${escapeHtml(String(part))}</span>`).join("");
+
+  return `
+    <details class="artifact-card">
+      <summary>
+        <div class="artifact-title">${escapeHtml(artifact.summary)}</div>
+        <div class="artifact-meta">${metaBits}</div>
+        <div class="artifact-preview">${escapeHtml(artifact.payloadPreview)}</div>
+      </summary>
+      <pre class="artifact-payload">${escapeHtml(artifact.payloadJson)}</pre>
+    </details>
+  `;
+}
+
 /* Session detail pane */
 
 function renderSessionDetail(detail: SessionDetail | undefined): void {
@@ -150,6 +191,15 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     `;
   }).join("");
 
+  const artifacts = detail.artifacts.length
+    ? `
+      <section class="artifact-list">
+        <div class="section-title">Artifacts</div>
+        ${detail.artifacts.map(renderArtifact).join("")}
+      </section>
+    `
+    : "";
+
   root.innerHTML = `
     <div class="detail-toolbar">
       <span class="detail-title">${escapeHtml(detail.title)}</span>
@@ -171,6 +221,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
         <input class="tag-input" type="text" name="tagName" placeholder="+ tag" />
       </form>
     </div>
+    ${artifacts}
     <div class="message-list">${messages}</div>
   `;
 
@@ -246,7 +297,7 @@ function bindSearch(report: DashboardData): void {
   const input = document.querySelector<HTMLInputElement>("[data-search-input]");
   if (!input) return;
 
-  input.addEventListener("input", () => {
+  input.oninput = () => {
     const q = input.value.trim();
     const items = q ? window.distillApi.searchSessions(q) : report.sessions;
     renderSessionList(items);
@@ -261,17 +312,30 @@ function bindSearch(report: DashboardData): void {
 
     const countEl = document.querySelector<HTMLElement>("[data-session-count]");
     if (countEl) countEl.textContent = q ? `${items.length} results` : `${items.length} sessions`;
-  });
+  };
 }
 
 function bindExportActions(): void {
   for (const btn of document.querySelectorAll<HTMLElement>("[data-export-label]")) {
-    btn.addEventListener("click", () => {
+    btn.onclick = () => {
       const label = btn.dataset.exportLabel;
       if (!label) return;
       const report = window.distillApi.exportSessionsByLabel(label);
       showExportToast(`Exported ${report.recordCount} ${report.label} -> ${report.outputPath}`);
-    });
+    };
+  }
+
+  const syncBtn = document.querySelector<HTMLElement>("[data-sync-now]");
+  if (syncBtn) {
+    syncBtn.onclick = async () => {
+      syncBtn.setAttribute("disabled", "true");
+      try {
+        const status = await window.distillApi.requestBackgroundSync();
+        renderSyncStatus(status);
+      } finally {
+        syncBtn.removeAttribute("disabled");
+      }
+    };
   }
 }
 
@@ -280,9 +344,28 @@ function bindSourcesToggle(): void {
   const panel = document.querySelector<HTMLElement>("[data-sources]");
   if (!toggle || !panel) return;
 
-  toggle.addEventListener("click", () => {
+  toggle.onclick = () => {
     toggle.classList.toggle("open");
     panel.classList.toggle("visible");
+  };
+}
+
+function refreshDashboard(): void {
+  dashboardData = window.distillApi.getDashboardData();
+  renderReport(dashboardData);
+}
+
+function bindBackgroundSync(): void {
+  if (syncStatusUnsubscribe) {
+    syncStatusUnsubscribe();
+  }
+
+  syncStatusUnsubscribe = window.distillApi.onBackgroundSyncStatus((status) => {
+    renderSyncStatus(status);
+
+    if (status.state === "completed") {
+      refreshDashboard();
+    }
   });
 }
 
@@ -319,21 +402,42 @@ function renderReport(report: DashboardData): void {
   }
 
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
-  renderSessionList(report.sessions);
+  const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
+  const items = query ? window.distillApi.searchSessions(query) : report.sessions;
+  renderSessionList(items);
   bindSearch(report);
   bindExportActions();
   bindSourcesToggle();
 
-  const first = report.sessions[0];
-  if (first) {
-    renderSessionDetail(window.distillApi.getSessionDetail(first.id));
-    document.querySelector<HTMLElement>(`[data-session-id="${first.id}"]`)?.classList.add("selected");
+  if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;
+
+  const preferredId =
+    activeSessionId !== null && window.distillApi.getSessionDetail(activeSessionId)
+      ? activeSessionId
+      : items[0] ? ("id" in items[0] ? items[0].id : items[0].sessionId) : undefined;
+
+  if (preferredId !== undefined) {
+    renderSessionDetail(window.distillApi.getSessionDetail(preferredId));
+    document.querySelector<HTMLElement>(`[data-session-id="${preferredId}"]`)?.classList.add("selected");
+  } else {
+    renderSessionDetail(undefined);
   }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   dashboardData = window.distillApi.getDashboardData();
   renderReport(dashboardData);
+  bindBackgroundSync();
+  window.distillApi.getBackgroundSyncStatus().then(renderSyncStatus).catch(() => {
+    renderSyncStatus({
+      state: "failed",
+      discoveredCaptures: 0,
+      importedCaptures: 0,
+      skippedCaptures: 0,
+      summary: "Sync status unavailable",
+      errorText: "Sync status unavailable"
+    });
+  });
 });
 
 export {};

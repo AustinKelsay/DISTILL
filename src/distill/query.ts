@@ -3,6 +3,7 @@ import { buildDoctorReport } from "./doctor";
 import {
   DashboardData,
   SearchResult,
+  SessionArtifact,
   SessionDetail,
   SessionDetailMessage,
   SessionLabel,
@@ -43,6 +44,17 @@ type SessionLabelRow = {
   name: string;
   scope: string;
   origin: string;
+};
+
+type SessionArtifactRow = {
+  id: number;
+  kind: string;
+  mime_type: string | null;
+  metadata_json: string;
+  created_at: string | null;
+  source_line_no: number | null;
+  message_ordinal: number | null;
+  message_role: string | null;
 };
 
 type SearchRow = {
@@ -93,6 +105,105 @@ function normalizeSearchQuery(query: string): string {
   const tokens = query.match(/[\p{L}\p{N}_-]+/gu) ?? [];
 
   return tokens.map((token) => `"${token.replace(/"/g, "\"\"")}"`).join(" AND ");
+}
+
+function clampValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) {
+    return "[truncated]";
+  }
+
+  if (typeof value === "string") {
+    return value.length > 320 ? `${value.slice(0, 317)}...` : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 12).map((entry) => clampValue(entry, depth + 1));
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 20);
+    return Object.fromEntries(entries.map(([key, entry]) => [key, clampValue(entry, depth + 1)]));
+  }
+
+  return value;
+}
+
+function parseArtifactPayload(metadataJson: string): Record<string, unknown> {
+  try {
+    const payload = JSON.parse(metadataJson) as Record<string, unknown>;
+    return payload && typeof payload === "object" ? payload : {};
+  } catch {
+    return {};
+  }
+}
+
+function payloadText(payload: Record<string, unknown>): string | undefined {
+  const content = payload.content;
+
+  if (typeof payload.text === "string" && payload.text.trim()) {
+    return payload.text.trim();
+  }
+
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  const text = content
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+
+      const row = entry as Record<string, unknown>;
+      return typeof row.text === "string" && row.text.trim() ? [row.text.trim()] : [];
+    })
+    .join(" ");
+
+  return text || undefined;
+}
+
+function summarizeArtifact(row: SessionArtifactRow, payload: Record<string, unknown>): string {
+  if (row.kind === "tool_call") {
+    const name = typeof payload.name === "string" ? payload.name : undefined;
+    return name ? `Tool call: ${name}` : "Tool call";
+  }
+
+  if (row.kind === "tool_result") {
+    const text = cleanExcerpt(payloadText(payload), 140);
+    return text ? `Tool result: ${text}` : "Tool result";
+  }
+
+  if (row.kind === "image") {
+    return row.mime_type ? `Image: ${row.mime_type}` : "Image artifact";
+  }
+
+  return row.kind.replace(/_/g, " ");
+}
+
+function artifactPreview(payload: Record<string, unknown>): string {
+  const text = cleanExcerpt(payloadText(payload), 220);
+  if (text) {
+    return text;
+  }
+
+  return JSON.stringify(clampValue(payload)) || "{}";
+}
+
+function mapArtifact(row: SessionArtifactRow): SessionArtifact {
+  const payload = parseArtifactPayload(row.metadata_json);
+
+  return {
+    id: row.id,
+    kind: row.kind,
+    mimeType: row.mime_type ?? undefined,
+    sourceLineNo: row.source_line_no ?? undefined,
+    messageOrdinal: row.message_ordinal ?? undefined,
+    messageRole: row.message_role ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    summary: summarizeArtifact(row, payload),
+    payloadPreview: artifactPreview(payload),
+    payloadJson: JSON.stringify(clampValue(payload), null, 2)
+  };
 }
 
 export function listRecentSessions(limit = 24): SessionListItem[] {
@@ -224,6 +335,26 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
       `)
       .all(sessionId) as SessionLabelRow[];
 
+    const artifacts = distillDb.db
+      .prepare(`
+        SELECT
+          a.id,
+          a.kind,
+          a.mime_type,
+          a.metadata_json,
+          a.created_at,
+          cr.line_no AS source_line_no,
+          m.ordinal AS message_ordinal,
+          m.role AS message_role
+        FROM artifacts a
+        LEFT JOIN capture_records cr ON cr.id = a.capture_record_id
+        LEFT JOIN messages m ON m.capture_record_id = a.capture_record_id
+          AND m.session_id = a.session_id
+        WHERE a.session_id = ?
+        ORDER BY COALESCE(m.ordinal, 999999), COALESCE(cr.line_no, 999999), a.id
+      `)
+      .all(sessionId) as SessionArtifactRow[];
+
     return {
       id: row.id,
       sourceKind: row.source_kind,
@@ -251,6 +382,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
           origin: label.origin
         })
       ),
+      artifacts: artifacts.map(mapArtifact),
       messages: messages.map(
         (message): SessionDetailMessage => ({
           id: message.id,
