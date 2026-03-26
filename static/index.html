@@ -154,6 +154,34 @@
         border-color: rgba(61, 191, 154, 0.45);
       }
 
+      [data-tooltip] {
+        position: relative;
+      }
+
+      [data-tooltip]:hover::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 8px);
+        transform: translateX(-50%);
+        max-width: 280px;
+        min-width: 120px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(18, 18, 22, 0.96);
+        border: 1px solid rgba(61, 191, 154, 0.26);
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.45;
+        white-space: normal;
+        text-transform: none;
+        letter-spacing: normal;
+        pointer-events: none;
+        z-index: 200;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+      }
+
       /* ── Onboarding banner (hidden by default, shown via JS) ── */
       .onboarding {
         display: none;
@@ -704,16 +732,19 @@
         class="topbar-search"
         placeholder="Search sessions…"
         data-search-input
+        title="Search imported session titles and transcript text."
+        data-tooltip="Search imported session titles and transcript text."
       />
       <button class="help-tip" type="button" data-help-tip="Search across imported session titles and transcript text. Clear the search box to return to your recent sessions.">?</button>
       <div class="topbar-stats" data-stats></div>
       <div class="topbar-actions">
-        <span class="topbar-sync" data-sync-status data-state="idle">idle</span>
-        <button class="btn" data-settings-open>settings</button>
-        <button class="btn" data-sync-now>↻ sync</button>
-        <button class="btn" data-export-label="train">↑ train</button>
-        <button class="btn" data-export-label="holdout">↑ holdout</button>
-        <button class="btn" data-export-label="favorite">↑ fav</button>
+        <span class="topbar-sync" data-sync-status data-state="idle" title="Background import status." data-tooltip="Background import status. Distill syncs on launch and periodically while the app is open.">idle</span>
+        <button class="btn" data-settings-open title="Open the current app settings snapshot." data-tooltip="Open the current app settings snapshot.">settings</button>
+        <button class="btn" data-sync-now title="Run a sync now." data-tooltip="Run a sync now and refresh local sessions from Codex and Claude histories.">↻ sync</button>
+        <button class="btn" data-export-label="train" title="Export sessions labeled train." data-tooltip="Export sessions labeled train to JSONL for dataset preparation.">↑ train</button>
+        <button class="btn" data-export-label="holdout" title="Export sessions labeled holdout." data-tooltip="Export sessions labeled holdout to JSONL for evaluation or validation splits.">↑ holdout</button>
+        <button class="btn" data-export-label="favorite" title="Export sessions labeled favorite." data-tooltip="Export sessions labeled favorite to JSONL for a hand-picked set.">↑ fav</button>
+        <button class="help-tip" type="button" data-help-tip="Top-bar actions let you sync local data, inspect settings, and export sessions by label." title="Explain the top bar actions." data-tooltip="Explain the top bar actions.">?</button>
       </div>
     </header>
 
@@ -733,8 +764,9 @@
           <span data-scanned-at></span>
         </div>
         <div data-sessions></div>
-        <div class="sources-toggle" data-sources-toggle>
+        <div class="sources-toggle" data-sources-toggle title="Show or hide detected local source health." data-tooltip="Show or hide detected local source health and data root checks.">
           <span class="arrow">▸</span> Sources
+          <button class="help-tip" type="button" data-help-tip="The Sources panel shows whether Distill can see your Codex and Claude local histories and which folders it is reading from.">?</button>
         </div>
         <div class="sources-panel" data-sources></div>
       </aside>

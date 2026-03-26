@@ -71,7 +71,13 @@ function showExportToast(message: string): void {
 }
 
 function renderHelpTip(text: string, label = "?"): string {
-  return `<button class="help-tip" type="button" data-help-tip="${escapeHtml(text)}" aria-label="${escapeHtml(text)}">${escapeHtml(label)}</button>`;
+  const safe = escapeHtml(text);
+  return `<button class="help-tip" type="button" data-help-tip="${safe}" data-tooltip="${safe}" title="${safe}" aria-label="${safe}">${escapeHtml(label)}</button>`;
+}
+
+function tooltipAttrs(text: string): string {
+  const safe = escapeHtml(text);
+  return `data-tooltip="${safe}" title="${safe}"`;
 }
 
 function renderSyncStatus(status: BackgroundSyncStatus): void {
@@ -100,13 +106,13 @@ function renderSource(source: DiscoveredSource): string {
     const pillText = check.exists ? "\u2713" : "\u2717";
     const count = typeof check.fileCount === "number" ? `${check.fileCount} files` : "";
     return `<div>
-      <span class="pill ${pillClass}">${pillText}</span>
+      <span class="pill ${pillClass}" ${tooltipAttrs(`${check.label}: ${check.exists ? "found" : "missing"} ${count}`.trim())}>${pillText}</span>
       ${escapeHtml(check.label)} <span style="color:var(--dim)">${escapeHtml(count)}</span>
     </div>`;
   }).join("");
 
   return `
-    <div class="source-row">
+    <div class="source-row" ${tooltipAttrs(`Source root: ${source.dataRoot ?? "not found"}`)}>
       <span class="status-dot ${dot}"></span>
       <span class="source-name">${escapeHtml(source.displayName)} ${renderHelpTip(`Distill checks whether ${source.displayName} is installed locally and whether its expected data directories are present.`)}</span>
       <span class="source-path">${escapeHtml(source.dataRoot ?? "not found")}</span>
@@ -118,8 +124,9 @@ function renderSource(source: DiscoveredSource): string {
 /* Session list item */
 
 function renderSessionItem(session: SessionListItem): string {
+  const metaTooltip = `${session.sourceKind} session, ${session.messageCount} messages${session.model ? `, model ${session.model}` : ""}${session.gitBranch ? `, branch ${session.gitBranch}` : ""}`;
   return `
-    <div class="session-item" data-session-id="${session.id}">
+    <div class="session-item" data-session-id="${session.id}" ${tooltipAttrs(metaTooltip)}>
       <div class="session-item-title">${escapeHtml(session.title)}</div>
       <div class="session-item-meta">
         <span class="badge badge-source">${session.sourceKind === "claude_code" ? "claude" : "codex"}</span>
@@ -135,7 +142,7 @@ function renderSessionItem(session: SessionListItem): string {
 
 function renderSearchItem(result: SearchResult): string {
   return `
-    <div class="session-item" data-session-id="${result.sessionId}">
+    <div class="session-item" data-session-id="${result.sessionId}" ${tooltipAttrs(`Search hit from ${result.sourceKind}. Click to open the full session transcript.`)}>
       <div class="session-item-title">${escapeHtml(result.title)}</div>
       <div class="session-item-meta">
         <span class="badge badge-source">${result.sourceKind === "claude_code" ? "claude" : "codex"}</span>
@@ -156,7 +163,7 @@ function renderArtifact(artifact: SessionArtifact): string {
   ].filter(Boolean).map((part) => `<span>${escapeHtml(String(part))}</span>`).join("");
 
   return `
-    <details class="artifact-card">
+    <details class="artifact-card" ${tooltipAttrs("Expand to inspect the structured payload Distill extracted from the raw session capture.")}>
       <summary>
         <div class="artifact-title">${escapeHtml(artifact.summary)}</div>
         <div class="artifact-meta">${metaBits}</div>
@@ -168,9 +175,9 @@ function renderArtifact(artifact: SessionArtifact): string {
 }
 
 function renderSettingsPanel(settings: AppSettingsSnapshot): string {
-  const labels = settings.defaultLabels.map((label) => `<span class="chip chip-static">${escapeHtml(label)}</span>`).join("");
+  const labels = settings.defaultLabels.map((label) => `<span class="chip chip-static" ${tooltipAttrs(`Default label: ${label}`)}>${escapeHtml(label)}</span>`).join("");
   const sources = settings.sourceKinds.map((source) =>
-    `<div class="settings-row"><span>${escapeHtml(source)}</span><span class="settings-note">enabled</span></div>`
+    `<div class="settings-row" ${tooltipAttrs(`${source} is part of the current local import pipeline.`)}><span>${escapeHtml(source)}</span><span class="settings-note">enabled</span></div>`
   ).join("");
 
   return `
@@ -181,27 +188,27 @@ function renderSettingsPanel(settings: AppSettingsSnapshot): string {
             <div class="section-title">Settings</div>
             <div class="settings-subtitle">Initial draft. Read-only for now.</div>
           </div>
-          <button class="btn" type="button" data-settings-close>close</button>
+          <button class="btn" type="button" data-settings-close ${tooltipAttrs("Close settings and return to the main transcript browser.")}>close</button>
         </div>
 
         <div class="settings-section">
           <div class="settings-section-title">Storage ${renderHelpTip("These are the local folders and database Distill is currently using. Environment variable overrides are shown so path issues are easier to diagnose.")}</div>
-          <div class="settings-code">${escapeHtml(settings.distillHome)}</div>
-          <div class="settings-row"><span>Database</span><span class="settings-note">${escapeHtml(settings.databasePath)}</span></div>
-          <div class="settings-row"><span>DISTILL_HOME override</span><span class="settings-note">${settings.envOverrides.distillHome ? "on" : "off"}</span></div>
+          <div class="settings-code" ${tooltipAttrs("Primary Distill working directory on this machine.")}>${escapeHtml(settings.distillHome)}</div>
+          <div class="settings-row" ${tooltipAttrs("SQLite database path used for imported sessions, messages, artifacts, and curation state.")}><span>Database</span><span class="settings-note">${escapeHtml(settings.databasePath)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("Whether DISTILL_HOME is explicitly set in the environment instead of using the default ~/.distill path.")}><span>DISTILL_HOME override</span><span class="settings-note">${settings.envOverrides.distillHome ? "on" : "off"}</span></div>
         </div>
 
         <div class="settings-section">
           <div class="settings-section-title">Sources ${renderHelpTip("Distill currently reads from local Codex CLI and Claude Code histories. These paths are where it expects to find those source files.")}</div>
           ${sources}
-          <div class="settings-row"><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
-          <div class="settings-row"><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("Local root used to discover Codex archived sessions and history files.")}><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("Local root used to discover Claude Code project session files and history.")}><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
         </div>
 
         <div class="settings-section">
           <div class="settings-section-title">Sync ${renderHelpTip("Distill imports on startup and then checks for local changes on a fixed interval while the app is open.")}</div>
-          <div class="settings-row"><span>Background interval</span><span class="settings-note">every ${settings.backgroundSyncIntervalMinutes} min</span></div>
-          <div class="settings-row"><span>Manual sync</span><span class="settings-note">top bar button</span></div>
+          <div class="settings-row" ${tooltipAttrs("How often Distill re-checks local source files while the app is open.")}><span>Background interval</span><span class="settings-note">every ${settings.backgroundSyncIntervalMinutes} min</span></div>
+          <div class="settings-row" ${tooltipAttrs("You can force a refresh at any time with the sync button in the top bar.")}><span>Manual sync</span><span class="settings-note">top bar button</span></div>
         </div>
 
         <div class="settings-section">
@@ -237,11 +244,11 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
   const defaultLabels = window.distillApi.getDefaultLabelNames();
   const activeLabels = new Set(detail.labels.map((label) => label.name));
   const labelChips = defaultLabels.map((name) =>
-    `<button class="chip ${activeLabels.has(name) ? "active" : ""}" data-toggle-label="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+    `<button class="chip ${activeLabels.has(name) ? "active" : ""}" data-toggle-label="${escapeHtml(name)}" ${tooltipAttrs(`${activeLabels.has(name) ? "Remove" : "Apply"} label "${name}" for export and review workflows.`)}>${escapeHtml(name)}</button>`
   ).join("");
 
   const tagChips = detail.tags.map((tag) =>
-    `<button class="chip" data-remove-tag-id="${tag.id}">#${escapeHtml(tag.name)} x</button>`
+    `<button class="chip" data-remove-tag-id="${tag.id}" ${tooltipAttrs(`Remove tag "${tag.name}" from this session.`)}>#${escapeHtml(tag.name)} x</button>`
   ).join("");
 
   const messages = detail.messages.map((msg) => {
@@ -287,7 +294,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
       <span class="sep"></span>
       ${tagChips}
       <form data-tag-form style="display:inline-flex;gap:4px;margin:0">
-        <input class="tag-input" type="text" name="tagName" placeholder="+ tag" />
+        <input class="tag-input" type="text" name="tagName" placeholder="+ tag" ${tooltipAttrs("Add a free-form tag to this session, then press Enter.")} />
       </form>
     </div>
     ${artifacts}
@@ -496,9 +503,9 @@ function renderReport(report: DashboardData): void {
 
   if (statsEl) {
     statsEl.innerHTML = `
-      <span><span class="stat-value">${totalSessions}</span> sessions</span>
-      <span><span class="stat-value">${totalMessages.toLocaleString()}</span> messages</span>
-      <span><span class="stat-value">${sourceCount}</span> sources</span>
+      <span ${tooltipAttrs("Total imported sessions currently visible in Distill.")}><span class="stat-value">${totalSessions}</span> sessions</span>
+      <span ${tooltipAttrs("Total normalized transcript messages across the current local database.")}><span class="stat-value">${totalMessages.toLocaleString()}</span> messages</span>
+      <span ${tooltipAttrs("Number of supported local sources currently detected as installed.")}><span class="stat-value">${sourceCount}</span> sources</span>
     `;
   }
 
