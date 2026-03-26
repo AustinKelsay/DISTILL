@@ -126,6 +126,29 @@ export type DashboardData = {
   sessions: SessionListItem[];
 };
 
+export type SearchResult = {
+  sessionId: number;
+  sourceKind: SourceKind;
+  title: string;
+  projectPath?: string;
+  updatedAt?: string;
+  snippet: string;
+};
+
+export type SessionTag = {
+  id: number;
+  name: string;
+  kind: string;
+  origin: string;
+};
+
+export type SessionLabel = {
+  id: number;
+  name: string;
+  scope: string;
+  origin: string;
+};
+
 export type SessionDetailMessage = {
   id: number;
   ordinal: number;
@@ -145,5 +168,7 @@ export type SessionDetail = {
   gitBranch?: string;
   preview?: string;
   artifactCount: number;
+  tags: SessionTag[];
+  labels: SessionLabel[];
   messages: SessionDetailMessage[];
 };

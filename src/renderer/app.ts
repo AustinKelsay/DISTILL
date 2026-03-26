@@ -1,4 +1,12 @@
-import { DashboardData, DoctorReport, DiscoveredSource, SessionDetail, SessionListItem } from "../shared/types";
+import {
+  DashboardData,
+  DoctorReport,
+  DiscoveredSource,
+  SearchResult,
+  SessionDetail,
+  SessionLabel,
+  SessionListItem
+} from "../shared/types";
 
 declare global {
   interface Window {
@@ -6,11 +14,17 @@ declare global {
       getDoctorReport: () => DoctorReport;
       getDashboardData: () => DashboardData;
       getSessionDetail: (sessionId: number) => SessionDetail | undefined;
+      searchSessions: (query: string) => SearchResult[];
+      addSessionTag: (sessionId: number, tagName: string) => void;
+      removeSessionTag: (sessionId: number, tagId: number) => void;
+      toggleSessionLabel: (sessionId: number, labelName: string) => void;
+      getDefaultLabelNames: () => string[];
     };
   }
 }
 
 let dashboardData: DashboardData | null = null;
+let activeSessionId: number | null = null;
 
 function renderSource(source: DiscoveredSource): string {
   const checks = source.checks
@@ -89,6 +103,22 @@ function renderSession(session: SessionListItem): string {
   `;
 }
 
+function renderSearchResult(result: SearchResult): string {
+  const updatedAt = result.updatedAt ? new Date(result.updatedAt).toLocaleString() : "Unknown";
+
+  return `
+    <article class="session-card search-result" data-session-id="${result.sessionId}">
+      <div class="session-header">
+        <span class="pill ok">${result.sourceKind}</span>
+        <span class="count">${updatedAt}</span>
+      </div>
+      <h3>${result.title}</h3>
+      <p class="session-project">${result.projectPath ?? "Unknown project"}</p>
+      <p class="session-preview">${result.snippet}</p>
+    </article>
+  `;
+}
+
 function renderSessionDetail(detail: SessionDetail | undefined): void {
   const detailRoot = document.querySelector<HTMLElement>("[data-session-detail]");
   if (!detailRoot) {
@@ -105,6 +135,33 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     `;
     return;
   }
+
+  activeSessionId = detail.id;
+
+  const tags = detail.tags.length
+    ? detail.tags
+        .map(
+          (tag) => `
+            <button class="tag-chip" data-remove-tag-id="${tag.id}" type="button">
+              #${tag.name}
+            </button>
+          `
+        )
+        .join("")
+    : `<span class="empty-note">No tags yet.</span>`;
+
+  const defaultLabels = window.distillApi.getDefaultLabelNames();
+  const activeLabels = new Set(detail.labels.map((label) => label.name));
+  const labelButtons = defaultLabels
+    .map((labelName) => {
+      const active = activeLabels.has(labelName);
+      return `
+        <button class="label-chip ${active ? "active" : ""}" data-toggle-label="${labelName}" type="button">
+          ${labelName}
+        </button>
+      `;
+    })
+    .join("");
 
   const messages = detail.messages
     .map((message) => {
@@ -150,9 +207,81 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
           <dd>${detail.gitBranch ?? "Unknown"}</dd>
         </div>
       </dl>
+      <section class="curation-block">
+        <div>
+          <p class="eyebrow">Labels</p>
+          <div class="chip-row">${labelButtons}</div>
+        </div>
+        <div>
+          <p class="eyebrow">Tags</p>
+          <div class="chip-row">${tags}</div>
+          <form class="tag-form" data-tag-form>
+            <input type="text" name="tagName" placeholder="Add a tag" />
+            <button type="submit">Add tag</button>
+          </form>
+        </div>
+      </section>
       <div class="message-list">${messages}</div>
     </div>
   `;
+
+  bindDetailCuration(detail.id);
+}
+
+function refreshActiveSession(): void {
+  if (activeSessionId === null) {
+    return;
+  }
+
+  renderSessionDetail(window.distillApi.getSessionDetail(activeSessionId));
+}
+
+function bindDetailCuration(sessionId: number): void {
+  const labelButtons = document.querySelectorAll<HTMLElement>("[data-toggle-label]");
+  for (const button of labelButtons) {
+    button.addEventListener("click", () => {
+      const labelName = button.dataset.toggleLabel;
+      if (!labelName) {
+        return;
+      }
+
+      window.distillApi.toggleSessionLabel(sessionId, labelName);
+      refreshActiveSession();
+    });
+  }
+
+  const tagButtons = document.querySelectorAll<HTMLElement>("[data-remove-tag-id]");
+  for (const button of tagButtons) {
+    button.addEventListener("click", () => {
+      const tagId = Number(button.dataset.removeTagId);
+      if (!Number.isFinite(tagId)) {
+        return;
+      }
+
+      window.distillApi.removeSessionTag(sessionId, tagId);
+      refreshActiveSession();
+    });
+  }
+
+  const form = document.querySelector<HTMLFormElement>("[data-tag-form]");
+  if (form) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const input = form.elements.namedItem("tagName");
+      if (!(input instanceof HTMLInputElement)) {
+        return;
+      }
+
+      const tagName = input.value.trim();
+      if (!tagName) {
+        return;
+      }
+
+      window.distillApi.addSessionTag(sessionId, tagName);
+      input.value = "";
+      refreshActiveSession();
+    });
+  }
 }
 
 function bindSessionClicks(): void {
@@ -173,6 +302,47 @@ function bindSessionClicks(): void {
   }
 }
 
+function renderSessionCollection(sessionsOrResults: Array<SessionListItem | SearchResult>): void {
+  const sessions = document.querySelector<HTMLElement>("[data-sessions]");
+  const sessionLead = document.querySelector<HTMLElement>("[data-session-lead]");
+  if (!sessions || !sessionLead) {
+    return;
+  }
+
+  const queryValue = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
+  if (queryValue) {
+    sessionLead.textContent = `Showing matches for "${queryValue}".`;
+    sessions.innerHTML = (sessionsOrResults as SearchResult[]).map(renderSearchResult).join("");
+  } else {
+    sessionLead.textContent = "Browse the most recent normalized conversations from your local database.";
+    sessions.innerHTML = (sessionsOrResults as SessionListItem[]).map(renderSession).join("");
+  }
+
+  bindSessionClicks();
+}
+
+function bindSearch(report: DashboardData): void {
+  const input = document.querySelector<HTMLInputElement>("[data-search-input]");
+  if (!input) {
+    return;
+  }
+
+  input.addEventListener("input", () => {
+    const query = input.value.trim();
+    const collection = query ? window.distillApi.searchSessions(query) : report.sessions;
+    renderSessionCollection(collection);
+
+    const first = collection[0];
+    renderSessionDetail(first ? window.distillApi.getSessionDetail("id" in first ? first.id : first.sessionId) : undefined);
+
+    const firstId = first ? ("id" in first ? first.id : first.sessionId) : undefined;
+    if (firstId !== undefined) {
+      const firstCard = document.querySelector<HTMLElement>(`[data-session-id="${firstId}"]`);
+      firstCard?.classList.add("selected");
+    }
+  });
+}
+
 function renderReport(report: DashboardData): void {
   const scannedAt = document.querySelector<HTMLElement>("[data-scanned-at]");
   const sources = document.querySelector<HTMLElement>("[data-sources]");
@@ -184,8 +354,8 @@ function renderReport(report: DashboardData): void {
 
   scannedAt.textContent = new Date(report.doctor.scannedAt).toLocaleString();
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
-  sessions.innerHTML = report.sessions.map(renderSession).join("");
-  bindSessionClicks();
+  renderSessionCollection(report.sessions);
+  bindSearch(report);
 
   const firstSession = report.sessions[0];
   renderSessionDetail(firstSession ? window.distillApi.getSessionDetail(firstSession.id) : undefined);
