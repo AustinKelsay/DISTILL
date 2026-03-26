@@ -1,5 +1,5 @@
-import { app, BrowserWindow } from "electron";
 import path from "node:path";
+import { app, BrowserWindow } from "electron";
 
 function createMainWindow(): void {
   const window = new BrowserWindow({
@@ -7,7 +7,7 @@ function createMainWindow(): void {
     height: 760,
     minWidth: 900,
     minHeight: 620,
-    backgroundColor: "#f2efe8",
+    backgroundColor: "#1a1a1e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

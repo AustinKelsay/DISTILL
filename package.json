@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "npm run build && electron .",
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "doctor": "npm run build && node dist/cli/doctor.js",
     "import": "npm run build && node dist/cli/import.js",
     "export": "npm run build && node dist/cli/export.js",

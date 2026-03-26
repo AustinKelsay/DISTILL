@@ -28,246 +28,176 @@ declare global {
 
 let dashboardData: DashboardData | null = null;
 let activeSessionId: number | null = null;
+let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 
-function setExportStatus(message: string): void {
-  const status = document.querySelector<HTMLElement>("[data-export-status]");
-  if (status) {
-    status.textContent = message;
-  }
+/* Helpers */
+
+function timeAgo(dateStr: string | undefined): string {
+  if (!dateStr) return "-";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
 }
+
+function showExportToast(message: string): void {
+  const el = document.querySelector<HTMLElement>("[data-export-status]");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add("visible");
+  if (exportTimeout) clearTimeout(exportTimeout);
+  exportTimeout = setTimeout(() => el.classList.remove("visible"), 4000);
+}
+
+/* Sources */
 
 function renderSource(source: DiscoveredSource): string {
-  const checks = source.checks
-    .map((check) => {
-      const count = typeof check.fileCount === "number" ? `<span class="count">${check.fileCount} files</span>` : "";
-      const statusClass = check.exists ? "ok" : "missing";
-      const statusLabel = check.exists ? "Found" : "Missing";
+  const dot = source.installStatus === "installed" ? "ok"
+    : source.installStatus === "partial" ? "warn" : "miss";
 
-      return `
-        <li class="check-row">
-          <div>
-            <div class="check-label">${escapeHtml(check.label)}</div>
-            <div class="check-path">${escapeHtml(check.path)}</div>
-          </div>
-          <div class="check-meta">
-            <span class="pill ${statusClass}">${statusLabel}</span>
-            ${count}
-          </div>
-        </li>
-      `;
-    })
-    .join("");
+  const checks = source.checks.map((check) => {
+    const pillClass = check.exists ? "pill-ok" : "pill-miss";
+    const pillText = check.exists ? "\u2713" : "\u2717";
+    const count = typeof check.fileCount === "number" ? `${check.fileCount} files` : "";
+    return `<div>
+      <span class="pill ${pillClass}">${pillText}</span>
+      ${escapeHtml(check.label)} <span style="color:var(--dim)">${escapeHtml(count)}</span>
+    </div>`;
+  }).join("");
 
   return `
-    <section class="source-card">
-      <div class="source-header">
-        <div>
-          <p class="eyebrow">${escapeHtml(source.kind)}</p>
-          <h2>${escapeHtml(source.displayName)}</h2>
-        </div>
-        <span class="status ${source.installStatus}">${source.installStatus.replace("_", " ")}</span>
-      </div>
-      <dl class="meta-grid">
-        <div>
-          <dt>Executable</dt>
-          <dd>${escapeHtml(source.executablePath ?? "Not found")}</dd>
-        </div>
-        <div>
-          <dt>Data Root</dt>
-          <dd>${escapeHtml(source.dataRoot ?? "Unknown")}</dd>
-        </div>
-      </dl>
-      <ul class="checks">${checks}</ul>
-    </section>
+    <div class="source-row">
+      <span class="status-dot ${dot}"></span>
+      <span class="source-name">${escapeHtml(source.displayName)}</span>
+      <span class="source-path">${escapeHtml(source.dataRoot ?? "not found")}</span>
+    </div>
+    <div class="source-checks">${checks}</div>
   `;
 }
 
-function renderSession(session: SessionListItem): string {
-  const updatedAt = session.updatedAt ? new Date(session.updatedAt).toLocaleString() : "Unknown";
-  const preview = session.preview ? session.preview.slice(0, 220) : "No preview yet.";
+/* Session list item */
 
+function renderSessionItem(session: SessionListItem): string {
   return `
-    <article class="session-card" data-session-id="${session.id}">
-      <div class="session-header">
-        <span class="pill ok">${session.sourceKind}</span>
-        <span class="count">${session.messageCount} msgs</span>
+    <div class="session-item" data-session-id="${session.id}">
+      <div class="session-item-title">${escapeHtml(session.title)}</div>
+      <div class="session-item-meta">
+        <span class="badge badge-source">${session.sourceKind === "claude_code" ? "claude" : "codex"}</span>
+        ${session.model ? `<span class="badge badge-model">${escapeHtml(session.model)}</span>` : ""}
+        <span>${session.messageCount} msgs</span>
+        <span>${timeAgo(session.updatedAt)}</span>
+        ${session.gitBranch ? `<span>\u2387 ${escapeHtml(session.gitBranch)}</span>` : ""}
       </div>
-      <h3>${escapeHtml(session.title)}</h3>
-      <p class="session-project">${escapeHtml(session.projectPath ?? "Unknown project")}</p>
-      <p class="session-preview">${escapeHtml(preview)}</p>
-      <dl class="session-meta">
-        <div>
-          <dt>Updated</dt>
-          <dd>${escapeHtml(updatedAt)}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>${escapeHtml(session.model ?? "Unknown")}</dd>
-        </div>
-        <div>
-          <dt>Branch</dt>
-          <dd>${escapeHtml(session.gitBranch ?? "Unknown")}</dd>
-        </div>
-      </dl>
-    </article>
+      ${session.preview ? `<div class="session-item-preview">${escapeHtml(session.preview.slice(0, 140))}</div>` : ""}
+    </div>
   `;
 }
 
-function renderSearchResult(result: SearchResult): string {
-  const updatedAt = result.updatedAt ? new Date(result.updatedAt).toLocaleString() : "Unknown";
-
+function renderSearchItem(result: SearchResult): string {
   return `
-    <article class="session-card search-result" data-session-id="${result.sessionId}">
-      <div class="session-header">
-        <span class="pill ok">${result.sourceKind}</span>
-        <span class="count">${updatedAt}</span>
+    <div class="session-item" data-session-id="${result.sessionId}">
+      <div class="session-item-title">${escapeHtml(result.title)}</div>
+      <div class="session-item-meta">
+        <span class="badge badge-source">${result.sourceKind === "claude_code" ? "claude" : "codex"}</span>
+        <span>${timeAgo(result.updatedAt)}</span>
       </div>
-      <h3>${escapeHtml(result.title)}</h3>
-      <p class="session-project">${escapeHtml(result.projectPath ?? "Unknown project")}</p>
-      <p class="session-preview">${escapeHtml(result.snippet)}</p>
-    </article>
+      <div class="session-item-preview">${escapeHtml(result.snippet)}</div>
+    </div>
   `;
 }
+
+/* Session detail pane */
 
 function renderSessionDetail(detail: SessionDetail | undefined): void {
-  const detailRoot = document.querySelector<HTMLElement>("[data-session-detail]");
-  if (!detailRoot) {
-    return;
-  }
+  const root = document.querySelector<HTMLElement>("[data-session-detail]");
+  if (!root) return;
 
   if (!detail) {
-    detailRoot.innerHTML = `
-      <div class="detail-empty">
-        <p class="eyebrow">Session Detail</p>
-        <h2>Select a session</h2>
-        <p>Choose any normalized conversation to inspect the transcript and metadata.</p>
-      </div>
-    `;
+    root.innerHTML = `<div class="detail-empty">Select a session</div>`;
+    activeSessionId = null;
     return;
   }
 
   activeSessionId = detail.id;
 
-  const tags = detail.tags.length
-    ? detail.tags
-        .map(
-          (tag) => `
-            <button class="tag-chip" data-remove-tag-id="${tag.id}" type="button">
-              #${escapeHtml(tag.name)}
-            </button>
-          `
-        )
-        .join("")
-    : `<span class="empty-note">No tags yet.</span>`;
-
   const defaultLabels = window.distillApi.getDefaultLabelNames();
   const activeLabels = new Set(detail.labels.map((label) => label.name));
-  const labelButtons = defaultLabels
-    .map((labelName) => {
-      const active = activeLabels.has(labelName);
-      return `
-        <button class="label-chip ${active ? "active" : ""}" data-toggle-label="${labelName}" type="button">
-          ${escapeHtml(labelName)}
-        </button>
-      `;
-    })
-    .join("");
+  const labelChips = defaultLabels.map((name) =>
+    `<button class="chip ${activeLabels.has(name) ? "active" : ""}" data-toggle-label="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+  ).join("");
 
-  const messages = detail.messages
-    .map((message) => {
-      const createdAt = message.createdAt ? new Date(message.createdAt).toLocaleString() : "Unknown";
-      return `
-        <article class="message-row ${message.role}">
-          <div class="message-meta">
-            <span class="pill ok">${message.role}</span>
-            <span class="count">#${message.ordinal}</span>
-            <span class="count">${escapeHtml(createdAt)}</span>
-          </div>
-          <p>${escapeHtml(message.text)}</p>
-        </article>
-      `;
-    })
-    .join("");
+  const tagChips = detail.tags.map((tag) =>
+    `<button class="chip" data-remove-tag-id="${tag.id}">#${escapeHtml(tag.name)} x</button>`
+  ).join("");
 
-  detailRoot.innerHTML = `
-    <div class="detail-shell">
-      <div class="detail-head">
-        <div>
-          <p class="eyebrow">Session Detail</p>
-          <h2>${escapeHtml(detail.title)}</h2>
-          <p class="detail-project">${escapeHtml(detail.projectPath ?? "Unknown project")}</p>
+  const messages = detail.messages.map((msg) => {
+    const roleClass = msg.role === "user" ? "msg-user"
+      : msg.role === "assistant" ? "msg-assistant" : "msg-system";
+    return `
+      <div class="msg ${roleClass}">
+        <div class="msg-header">
+          <span class="role">${escapeHtml(msg.role)}</span>
+          <span>#${msg.ordinal}</span>
+          <span>${timeAgo(msg.createdAt)}</span>
         </div>
-        <div class="detail-summary">
-          <span class="pill ok">${detail.sourceKind}</span>
-          <span class="count">${detail.messageCount} msgs</span>
-          <span class="count">${detail.artifactCount} artifacts</span>
-        </div>
+        <div>${escapeHtml(msg.text)}</div>
       </div>
-      <dl class="detail-meta">
-        <div>
-          <dt>Updated</dt>
-          <dd>${escapeHtml(detail.updatedAt ? new Date(detail.updatedAt).toLocaleString() : "Unknown")}</dd>
-        </div>
-        <div>
-          <dt>Model</dt>
-          <dd>${escapeHtml(detail.model ?? "Unknown")}</dd>
-        </div>
-        <div>
-          <dt>Branch</dt>
-          <dd>${escapeHtml(detail.gitBranch ?? "Unknown")}</dd>
-        </div>
-      </dl>
-      <section class="curation-block">
-        <div>
-          <p class="eyebrow">Labels</p>
-          <div class="chip-row">${labelButtons}</div>
-        </div>
-        <div>
-          <p class="eyebrow">Tags</p>
-          <div class="chip-row">${tags}</div>
-          <form class="tag-form" data-tag-form>
-            <input type="text" name="tagName" placeholder="Add a tag" />
-            <button type="submit">Add tag</button>
-          </form>
-        </div>
-      </section>
-      <div class="message-list">${messages}</div>
+    `;
+  }).join("");
+
+  root.innerHTML = `
+    <div class="detail-toolbar">
+      <span class="detail-title">${escapeHtml(detail.title)}</span>
+      <div class="detail-meta-inline">
+        <span>${detail.sourceKind === "claude_code" ? "claude" : "codex"}</span>
+        ${detail.model ? `<span>${escapeHtml(detail.model)}</span>` : ""}
+        <span>${detail.messageCount} msgs</span>
+        <span>${detail.artifactCount} artifacts</span>
+        ${detail.gitBranch ? `<span>\u2387 ${escapeHtml(detail.gitBranch)}</span>` : ""}
+        ${detail.projectPath ? `<span>${escapeHtml(detail.projectPath)}</span>` : ""}
+        <span>${timeAgo(detail.updatedAt)}</span>
+      </div>
     </div>
+    <div class="curation-bar">
+      ${labelChips}
+      <span class="sep"></span>
+      ${tagChips}
+      <form data-tag-form style="display:inline-flex;gap:4px;margin:0">
+        <input class="tag-input" type="text" name="tagName" placeholder="+ tag" />
+      </form>
+    </div>
+    <div class="message-list">${messages}</div>
   `;
 
   bindDetailCuration(detail.id);
 }
 
 function refreshActiveSession(): void {
-  if (activeSessionId === null) {
-    return;
-  }
-
+  if (activeSessionId === null) return;
   renderSessionDetail(window.distillApi.getSessionDetail(activeSessionId));
 }
 
-function bindDetailCuration(sessionId: number): void {
-  const labelButtons = document.querySelectorAll<HTMLElement>("[data-toggle-label]");
-  for (const button of labelButtons) {
-    button.addEventListener("click", () => {
-      const labelName = button.dataset.toggleLabel;
-      if (!labelName) {
-        return;
-      }
+/* Event binding */
 
-      window.distillApi.toggleSessionLabel(sessionId, labelName);
+function bindDetailCuration(sessionId: number): void {
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-toggle-label]")) {
+    btn.addEventListener("click", () => {
+      const label = btn.dataset.toggleLabel;
+      if (!label) return;
+      window.distillApi.toggleSessionLabel(sessionId, label);
       refreshActiveSession();
     });
   }
 
-  const tagButtons = document.querySelectorAll<HTMLElement>("[data-remove-tag-id]");
-  for (const button of tagButtons) {
-    button.addEventListener("click", () => {
-      const tagId = Number(button.dataset.removeTagId);
-      if (!Number.isFinite(tagId)) {
-        return;
-      }
-
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-remove-tag-id]")) {
+    btn.addEventListener("click", () => {
+      const tagId = Number(btn.dataset.removeTagId);
+      if (!Number.isFinite(tagId)) return;
       window.distillApi.removeSessionTag(sessionId, tagId);
       refreshActiveSession();
     });
@@ -275,19 +205,13 @@ function bindDetailCuration(sessionId: number): void {
 
   const form = document.querySelector<HTMLFormElement>("[data-tag-form]");
   if (form) {
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
       const input = form.elements.namedItem("tagName");
-      if (!(input instanceof HTMLInputElement)) {
-        return;
-      }
-
-      const tagName = input.value.trim();
-      if (!tagName) {
-        return;
-      }
-
-      window.distillApi.addSessionTag(sessionId, tagName);
+      if (!(input instanceof HTMLInputElement)) return;
+      const name = input.value.trim();
+      if (!name) return;
+      window.distillApi.addSessionTag(sessionId, name);
       input.value = "";
       refreshActiveSession();
     });
@@ -295,100 +219,115 @@ function bindDetailCuration(sessionId: number): void {
 }
 
 function bindSessionClicks(): void {
-  const cards = document.querySelectorAll<HTMLElement>("[data-session-id]");
-  for (const card of cards) {
-    card.addEventListener("click", () => {
-      const sessionId = Number(card.dataset.sessionId);
-      if (!Number.isFinite(sessionId)) {
-        return;
-      }
-
-      renderSessionDetail(window.distillApi.getSessionDetail(sessionId));
-
-      for (const other of cards) {
-        other.classList.toggle("selected", other === card);
-      }
+  const items = document.querySelectorAll<HTMLElement>("[data-session-id]");
+  for (const item of items) {
+    item.addEventListener("click", () => {
+      const id = Number(item.dataset.sessionId);
+      if (!Number.isFinite(id)) return;
+      renderSessionDetail(window.distillApi.getSessionDetail(id));
+      for (const other of items) other.classList.toggle("selected", other === item);
     });
   }
 }
 
-function renderSessionCollection(sessionsOrResults: Array<SessionListItem | SearchResult>): void {
-  const sessions = document.querySelector<HTMLElement>("[data-sessions]");
-  const sessionLead = document.querySelector<HTMLElement>("[data-session-lead]");
-  if (!sessions || !sessionLead) {
-    return;
-  }
+function renderSessionList(items: Array<SessionListItem | SearchResult>): void {
+  const container = document.querySelector<HTMLElement>("[data-sessions]");
+  if (!container) return;
 
-  const queryValue = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
-  if (queryValue) {
-    sessionLead.textContent = `Showing matches for "${queryValue}".`;
-    sessions.innerHTML = (sessionsOrResults as SearchResult[]).map(renderSearchResult).join("");
-  } else {
-    sessionLead.textContent = "Browse the most recent normalized conversations from your local database.";
-    sessions.innerHTML = (sessionsOrResults as SessionListItem[]).map(renderSession).join("");
-  }
+  const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
+  container.innerHTML = query
+    ? (items as SearchResult[]).map(renderSearchItem).join("")
+    : (items as SessionListItem[]).map(renderSessionItem).join("");
 
   bindSessionClicks();
 }
 
 function bindSearch(report: DashboardData): void {
   const input = document.querySelector<HTMLInputElement>("[data-search-input]");
-  if (!input) {
-    return;
-  }
+  if (!input) return;
 
   input.addEventListener("input", () => {
-    const query = input.value.trim();
-    const collection = query ? window.distillApi.searchSessions(query) : report.sessions;
-    renderSessionCollection(collection);
+    const q = input.value.trim();
+    const items = q ? window.distillApi.searchSessions(q) : report.sessions;
+    renderSessionList(items);
 
-    const first = collection[0];
-    renderSessionDetail(first ? window.distillApi.getSessionDetail("id" in first ? first.id : first.sessionId) : undefined);
-
+    const first = items[0];
     const firstId = first ? ("id" in first ? first.id : first.sessionId) : undefined;
+    renderSessionDetail(firstId !== undefined ? window.distillApi.getSessionDetail(firstId) : undefined);
+
     if (firstId !== undefined) {
-      const firstCard = document.querySelector<HTMLElement>(`[data-session-id="${firstId}"]`);
-      firstCard?.classList.add("selected");
+      document.querySelector<HTMLElement>(`[data-session-id="${firstId}"]`)?.classList.add("selected");
     }
+
+    const countEl = document.querySelector<HTMLElement>("[data-session-count]");
+    if (countEl) countEl.textContent = q ? `${items.length} results` : `${items.length} sessions`;
   });
 }
 
 function bindExportActions(): void {
-  const buttons = document.querySelectorAll<HTMLElement>("[data-export-label]");
-  for (const button of buttons) {
-    button.addEventListener("click", () => {
-      const label = button.dataset.exportLabel;
-      if (!label) {
-        return;
-      }
-
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-export-label]")) {
+    btn.addEventListener("click", () => {
+      const label = btn.dataset.exportLabel;
+      if (!label) return;
       const report = window.distillApi.exportSessionsByLabel(label);
-      setExportStatus(`Exported ${report.recordCount} ${report.label} session(s) to ${report.outputPath}`);
+      showExportToast(`Exported ${report.recordCount} ${report.label} -> ${report.outputPath}`);
     });
   }
 }
 
-function renderReport(report: DashboardData): void {
-  const scannedAt = document.querySelector<HTMLElement>("[data-scanned-at]");
-  const sources = document.querySelector<HTMLElement>("[data-sources]");
-  const sessions = document.querySelector<HTMLElement>("[data-sessions]");
+function bindSourcesToggle(): void {
+  const toggle = document.querySelector<HTMLElement>("[data-sources-toggle]");
+  const panel = document.querySelector<HTMLElement>("[data-sources]");
+  if (!toggle || !panel) return;
 
-  if (!scannedAt || !sources || !sessions) {
-    return;
+  toggle.addEventListener("click", () => {
+    toggle.classList.toggle("open");
+    panel.classList.toggle("visible");
+  });
+}
+
+/* Main render */
+
+function renderReport(report: DashboardData): void {
+  const sources = document.querySelector<HTMLElement>("[data-sources]");
+  const sessionsEl = document.querySelector<HTMLElement>("[data-sessions]");
+  const statsEl = document.querySelector<HTMLElement>("[data-stats]");
+  const countEl = document.querySelector<HTMLElement>("[data-session-count]");
+  const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
+  const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
+
+  if (!sources || !sessionsEl) return;
+
+  const totalSessions = report.sessions.length;
+  const totalMessages = report.sessions.reduce((sum, session) => sum + session.messageCount, 0);
+  const sourceCount = report.doctor.sources.filter((source) => source.installStatus === "installed").length;
+
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <span><span class="stat-value">${totalSessions}</span> sessions</span>
+      <span><span class="stat-value">${totalMessages.toLocaleString()}</span> messages</span>
+      <span><span class="stat-value">${sourceCount}</span> sources</span>
+    `;
   }
 
-  scannedAt.textContent = new Date(report.doctor.scannedAt).toLocaleString();
+  if (countEl) countEl.textContent = `${totalSessions} sessions`;
+  if (scannedEl) scannedEl.textContent = timeAgo(report.doctor.scannedAt);
+
+  if (onboarding) {
+    const needsOnboarding = totalSessions === 0;
+    onboarding.classList.toggle("visible", needsOnboarding);
+  }
+
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
-  renderSessionCollection(report.sessions);
+  renderSessionList(report.sessions);
   bindSearch(report);
   bindExportActions();
+  bindSourcesToggle();
 
-  const firstSession = report.sessions[0];
-  renderSessionDetail(firstSession ? window.distillApi.getSessionDetail(firstSession.id) : undefined);
-
-  if (firstSession) {
-    const firstCard = document.querySelector<HTMLElement>(`[data-session-id="${firstSession.id}"]`);
-    firstCard?.classList.add("selected");
+  const first = report.sessions[0];
+  if (first) {
+    renderSessionDetail(window.distillApi.getSessionDetail(first.id));
+    document.querySelector<HTMLElement>(`[data-session-id="${first.id}"]`)?.classList.add("selected");
   }
 }
 
