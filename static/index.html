@@ -232,6 +232,32 @@
         margin-bottom: 18px;
       }
 
+      .export-bar {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 22px;
+      }
+
+      .export-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .export-actions button {
+        border: 1px solid rgba(216, 207, 191, 0.95);
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: rgba(255, 251, 245, 0.92);
+        color: var(--ink);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .export-actions button:hover {
+        border-color: rgba(23, 92, 76, 0.32);
+      }
+
       .search-bar input {
         width: 100%;
         padding: 14px 16px;
@@ -494,6 +520,17 @@
         />
         <p class="lede" data-session-lead>
           Browse the most recent normalized conversations from your local database.
+        </p>
+      </section>
+
+      <section class="export-bar">
+        <div class="export-actions">
+          <button type="button" data-export-label="train">Export train</button>
+          <button type="button" data-export-label="holdout">Export holdout</button>
+          <button type="button" data-export-label="favorite">Export favorite</button>
+        </div>
+        <p class="lede" data-export-status>
+          Export labeled sessions as JSONL without leaving the app.
         </p>
       </section>
 

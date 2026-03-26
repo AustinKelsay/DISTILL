@@ -2,6 +2,7 @@ import {
   DashboardData,
   DoctorReport,
   DiscoveredSource,
+  ExportReport,
   SearchResult,
   SessionDetail,
   SessionLabel,
@@ -19,12 +20,20 @@ declare global {
       removeSessionTag: (sessionId: number, tagId: number) => void;
       toggleSessionLabel: (sessionId: number, labelName: string) => void;
       getDefaultLabelNames: () => string[];
+      exportSessionsByLabel: (label: string) => ExportReport;
     };
   }
 }
 
 let dashboardData: DashboardData | null = null;
 let activeSessionId: number | null = null;
+
+function setExportStatus(message: string): void {
+  const status = document.querySelector<HTMLElement>("[data-export-status]");
+  if (status) {
+    status.textContent = message;
+  }
+}
 
 function renderSource(source: DiscoveredSource): string {
   const checks = source.checks
@@ -343,6 +352,21 @@ function bindSearch(report: DashboardData): void {
   });
 }
 
+function bindExportActions(): void {
+  const buttons = document.querySelectorAll<HTMLElement>("[data-export-label]");
+  for (const button of buttons) {
+    button.addEventListener("click", () => {
+      const label = button.dataset.exportLabel;
+      if (!label) {
+        return;
+      }
+
+      const report = window.distillApi.exportSessionsByLabel(label);
+      setExportStatus(`Exported ${report.recordCount} ${report.label} session(s) to ${report.outputPath}`);
+    });
+  }
+}
+
 function renderReport(report: DashboardData): void {
   const scannedAt = document.querySelector<HTMLElement>("[data-scanned-at]");
   const sources = document.querySelector<HTMLElement>("[data-sources]");
@@ -356,6 +380,7 @@ function renderReport(report: DashboardData): void {
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
   renderSessionCollection(report.sessions);
   bindSearch(report);
+  bindExportActions();
 
   const firstSession = report.sessions[0];
   renderSessionDetail(firstSession ? window.distillApi.getSessionDetail(firstSession.id) : undefined);

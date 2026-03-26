@@ -109,6 +109,13 @@ export type ImportReport = {
   captures: ImportedCapture[];
 };
 
+export type ExportReport = {
+  exportedAt: string;
+  label: string;
+  outputPath: string;
+  recordCount: number;
+};
+
 export type SessionListItem = {
   id: number;
   sourceKind: SourceKind;

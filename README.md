@@ -23,19 +23,22 @@ Implemented now:
 - CLI `doctor` command
 - SQLite bootstrap from `schema.sql`
 - CLI `import` command
+- CLI `export` command
 - idempotent raw capture recording keyed by source path and SHA-256
 - normalized `sessions`, `messages`, and `artifacts` import
 - parser coverage for Codex archived sessions and Claude project sessions
 - basic dashboard query for recent sessions
+- interactive search UI over normalized FTS results
 - session detail query and transcript read model
-- minimal Electron UI showing source health, recent sessions, and session detail
-- tests for doctor, parsing, import, and query behavior
+- manual session tags and labels
+- labeled JSONL export
+- minimal Electron UI showing source health, recent sessions, search, session detail, curation controls, and export actions
+- tests for doctor, parsing, import, query, and export behavior
 
 Not implemented yet:
 
-- interactive search UI over FTS
-- tags, labels, and export flows
 - background job processing beyond schema placeholders
+- richer artifact browsing in the Electron UI
 
 ## Local Storage
 
@@ -97,6 +100,12 @@ Import local captures into `~/.distill/distill.db`:
 npm run import
 ```
 
+Export labeled sessions as JSONL:
+
+```bash
+npm run export -- train
+```
+
 Run tests:
 
 ```bash
@@ -120,6 +129,8 @@ The current importer:
 5. parses raw records
 6. upserts normalized sessions
 7. replaces normalized messages and artifacts for each imported session
+8. supports manual session curation through tags and labels
+9. exports labeled sessions as JSONL
 
 That means re-running `npm run import` is expected and safe. New or changed files import again; previously normalized identical captures are skipped.
 

@@ -1,6 +1,7 @@
 import { contextBridge } from "electron";
 import { addSessionTag, getDefaultLabelNames, removeSessionTag, toggleSessionLabel } from "../distill/curation";
 import { buildDoctorReport } from "../distill/doctor";
+import { exportSessionsByLabel } from "../distill/export";
 import { getDashboardData, getSessionDetail, searchSessions } from "../distill/query";
 
 contextBridge.exposeInMainWorld("distillApi", {
@@ -11,5 +12,6 @@ contextBridge.exposeInMainWorld("distillApi", {
   addSessionTag: (sessionId: number, tagName: string) => addSessionTag(sessionId, tagName),
   removeSessionTag: (sessionId: number, tagId: number) => removeSessionTag(sessionId, tagId),
   toggleSessionLabel: (sessionId: number, labelName: string) => toggleSessionLabel(sessionId, labelName),
-  getDefaultLabelNames: () => getDefaultLabelNames()
+  getDefaultLabelNames: () => getDefaultLabelNames(),
+  exportSessionsByLabel: (label: string) => exportSessionsByLabel(label)
 });

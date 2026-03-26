@@ -59,6 +59,10 @@ Implemented now:
 - normalized `sessions` import
 - normalized `messages` import
 - basic artifact extraction for Claude Code image and tool blocks
+- shared search query over normalized data
+- shared session tags and labels
+- labeled JSONL export
+- Electron session browser with detail and curation controls
 
 This means the project already has a working source-discovery, raw-capture, and first normalized-ingest spine.
 
@@ -439,7 +443,7 @@ Runs:
 Not implemented yet:
 
 - `distill sources`
-- query, export, or maintenance commands
+- maintenance commands beyond `doctor`, `import`, and `export`
 
 ## Milestone Order
 
@@ -474,7 +478,7 @@ Build:
 
 - FTS indexing
 - search and richer query layer
-- export of `train` labeled sessions
+- export of labeled sessions
 
 ## Open Decisions
 
@@ -492,8 +496,7 @@ The runtime and initial project skeleton are chosen and implemented, `distill do
 
 So the next actual coding step is:
 
-1. add search over normalized data
-2. enrich artifact handling and metadata extraction
-3. add tagging, labeling, and export flows
-4. grow the Electron UI beyond session list/detail into real curation flows
-5. introduce background jobs where synchronous import becomes too heavy
+1. enrich artifact handling and metadata extraction
+2. add lightweight search filters for source/model/label
+3. grow the Electron UI beyond session list/detail into richer curation flows
+4. introduce background jobs where synchronous import becomes too heavy
