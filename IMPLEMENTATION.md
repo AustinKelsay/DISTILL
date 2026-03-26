@@ -74,7 +74,7 @@ These are the internal shapes every connector should emit.
 
 ```ts
 type DiscoveredSource = {
-  kind: "codex" | "claude_code";
+  kind: "codex" | "claude_code" | "opencode";
   displayName: string;
   executablePath?: string;
   dataRoot?: string;
@@ -95,7 +95,7 @@ One row per source file that should be imported.
 
 ```ts
 type DiscoveredCapture = {
-  sourceKind: "codex" | "claude_code";
+  sourceKind: "codex" | "claude_code" | "opencode";
   captureKind: string;
   sourcePath: string;
   externalSessionId?: string;
@@ -109,7 +109,7 @@ type DiscoveredCapture = {
 
 ```ts
 type NormalizedSession = {
-  sourceKind: "codex" | "claude_code";
+  sourceKind: "codex" | "claude_code" | "opencode";
   externalSessionId: string;
   title?: string;
   projectPath?: string;
@@ -180,12 +180,12 @@ Each connector should implement the same contract:
 
 ```ts
 interface SourceConnector {
-  kind: "codex" | "claude_code";
+  kind: "codex" | "claude_code" | "opencode";
   detect(): Promise<DiscoveredSource>;
   discoverCaptures(): Promise<DiscoveredCapture[]>;
-  fingerprintCapture(capture: DiscoveredCapture): Promise<{
+  snapshotCapture(capture: DiscoveredCapture): Promise<{
+    rawText: string;
     rawSha256: string;
-    rawBlobPath?: string;
     sourceModifiedAt?: string;
     sourceSizeBytes?: number;
   }>;
@@ -208,6 +208,7 @@ In the current codebase this contract is implemented as plain functions rather t
 
 - `detect*Source()`
 - `discover*Captures()`
+- `snapshot*Capture()`
 - `parse*Capture()`
 
 ## Shared Ingest Pipeline
@@ -216,7 +217,7 @@ This should be the same for every source:
 
 1. detect sources
 2. discover candidate captures
-3. fingerprint each capture
+3. snapshot and fingerprint each capture
 4. skip if `(source_id, source_path, raw_sha256)` already exists
 5. copy raw content into Distill blobs if needed
 6. insert `captures`
@@ -357,6 +358,42 @@ Do not normalize into transcript text:
 - `tool_use` blocks
 - `tool_result` blocks
 - meta-only records
+
+## OpenCode Connector
+
+### Detection
+
+The OpenCode connector should verify:
+
+- `opencode` is on `PATH`
+- the OpenCode sqlite database exists
+- the OpenCode config directory exists
+- `~/.local/state/opencode/prompt-history.jsonl` exists when available
+
+### Capture Discovery
+
+Initial capture set:
+
+- one virtual capture per session returned by `opencode db ... --format json`
+
+### Parsing Rules
+
+Use `opencode export <sessionId>` JSON as the source of truth.
+
+Keep visible in the normalized transcript:
+
+- `text`
+- `reasoning`
+- `step-start`
+- `step-finish`
+- `tool`
+- `file`
+
+Promote structured payloads to artifacts for:
+
+- `tool`
+- `file`
+- unknown future non-text parts
 
 ## Claude Artifacts
 

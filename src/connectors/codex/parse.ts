@@ -1,12 +1,13 @@
 import path from "node:path";
 import { getCodexHome } from "../../distill/paths";
-import { readJsonl } from "../../distill/jsonl";
+import { parseJsonlText, readJsonl } from "../../distill/jsonl";
 import {
   DiscoveredCapture,
   NormalizedMessage,
   ParsedCapture,
   ParsedCaptureRecord
 } from "../../shared/types";
+import { CaptureSnapshot } from "../types";
 
 function readCodexSessionIndex(): Map<string, { threadName?: string; updatedAt?: string }> {
   const indexPath = path.join(getCodexHome(), "session_index.jsonl");
@@ -87,8 +88,8 @@ function pickCodexTitle(
   return firstUserMessage?.text.split("\n")[0]?.trim().slice(0, 160) || undefined;
 }
 
-export function parseCodexCapture(capture: DiscoveredCapture): ParsedCapture {
-  const rows = readJsonl(capture.sourcePath);
+export function parseCodexCapture(capture: DiscoveredCapture, snapshot: CaptureSnapshot): ParsedCapture {
+  const rows = parseJsonlText(snapshot.rawText);
   const sessionIndex = readCodexSessionIndex();
   const rawRecords: ParsedCaptureRecord[] = [];
   const messages: NormalizedMessage[] = [];

@@ -1,15 +1,16 @@
 # Discovery Pass
 
-Date: 2026-03-25
+Date: 2026-03-26
 
-This discovery pass was run on the current machine to verify whether Distill can start by ingesting local chat history from Codex CLI and Claude Code.
+This discovery pass was run on the current machine to verify whether Distill can start by ingesting local chat history from Codex CLI, Claude Code, and OpenCode.
 
 ## Outcome
 
-Both target tools are installed on this machine and both already store usable local conversation history on disk.
+All target tools are installed on this machine and already store usable local conversation history locally.
 
 - `codex` binary found at `/opt/homebrew/bin/codex`
 - `claude` binary found at `/Users/plebdev/.local/bin/claude`
+- `opencode` binary found at `/Users/plebdev/.opencode/bin/opencode`
 
 That means the Distill MVP can begin with direct local ingestion and does not need a browser capture path.
 
@@ -65,6 +66,35 @@ Example files:
 
 - `~/.claude/projects/-Users-plebdev-Desktop-code-austin-ai-meetup-list/690bab39-97ff-4313-99b3-b707a5b9d57b.jsonl`
 - `~/.claude/history.jsonl`
+
+### OpenCode
+
+Primary paths observed:
+
+- `~/.local/share/opencode/opencode.db`
+- `~/.config/opencode/opencode.json`
+- `~/.local/state/opencode/prompt-history.jsonl`
+
+Observed on this machine:
+
+- `19` sessions in `opencode.db`
+- `150` messages in `opencode.db`
+- `493` parts in `opencode.db`
+
+Known part types observed on 2026-03-26:
+
+- `text`
+- `reasoning`
+- `tool`
+- `file`
+- `step-start`
+- `step-finish`
+
+OpenCode parsing note:
+
+- `opencode session list` returned no usable machine-readable output here
+- `opencode db ... --format json` returned session rows reliably
+- `opencode export <sessionId>` returned the usable transcript JSON, with a leading `Exporting session: ...` line before the JSON payload
 
 ## Sample File Shapes
 

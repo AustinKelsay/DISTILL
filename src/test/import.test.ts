@@ -12,12 +12,18 @@ function withTempEnv<T>(fn: (root: string) => T): T {
   const previous = {
     DISTILL_HOME: process.env.DISTILL_HOME,
     CODEX_HOME: process.env.CODEX_HOME,
-    CLAUDE_HOME: process.env.CLAUDE_HOME
+    CLAUDE_HOME: process.env.CLAUDE_HOME,
+    OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    TEST_OPENCODE_DB_PATH: process.env.TEST_OPENCODE_DB_PATH,
+    TEST_OPENCODE_DB_QUERY_JSON: process.env.TEST_OPENCODE_DB_QUERY_JSON,
+    TEST_OPENCODE_EXPORT_DIR: process.env.TEST_OPENCODE_EXPORT_DIR,
+    PATH: process.env.PATH
   };
 
   process.env.DISTILL_HOME = path.join(tempRoot, ".distill");
   process.env.CODEX_HOME = path.join(tempRoot, ".codex");
   process.env.CLAUDE_HOME = path.join(tempRoot, ".claude");
+  process.env.OPENCODE_CONFIG_DIR = path.join(tempRoot, ".config", "opencode");
 
   try {
     return fn(tempRoot);
@@ -25,6 +31,11 @@ function withTempEnv<T>(fn: (root: string) => T): T {
     process.env.DISTILL_HOME = previous.DISTILL_HOME;
     process.env.CODEX_HOME = previous.CODEX_HOME;
     process.env.CLAUDE_HOME = previous.CLAUDE_HOME;
+    process.env.OPENCODE_CONFIG_DIR = previous.OPENCODE_CONFIG_DIR;
+    process.env.TEST_OPENCODE_DB_PATH = previous.TEST_OPENCODE_DB_PATH;
+    process.env.TEST_OPENCODE_DB_QUERY_JSON = previous.TEST_OPENCODE_DB_QUERY_JSON;
+    process.env.TEST_OPENCODE_EXPORT_DIR = previous.TEST_OPENCODE_EXPORT_DIR;
+    process.env.PATH = previous.PATH;
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
@@ -32,9 +43,12 @@ function withTempEnv<T>(fn: (root: string) => T): T {
 function writeFixtureFiles(root: string): void {
   const codexPath = path.join(root, ".codex", "archived_sessions");
   const claudePath = path.join(root, ".claude", "projects", "demo-project");
+  const opencodeConfigDir = path.join(root, ".config", "opencode");
 
   ensureDirectory(codexPath);
   ensureDirectory(claudePath);
+  ensureDirectory(opencodeConfigDir);
+  fs.writeFileSync(path.join(opencodeConfigDir, "opencode.json"), "{}\n");
 
   fs.writeFileSync(
     path.join(codexPath, "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"),
@@ -64,6 +78,64 @@ function writeFixtureFiles(root: string): void {
       })
     ].join("\n")
   );
+
+  writeFakeOpenCodeExecutable(root, [], {});
+}
+
+function writeFakeOpenCodeExecutable(
+  root: string,
+  sessions: Array<Record<string, unknown>>,
+  exportsBySession: Record<string, string>
+): void {
+  const binDir = path.join(root, ".bin");
+  const opencodeDbPath = path.join(root, ".local", "share", "opencode", "opencode.db");
+  const dbQueryPath = path.join(root, "opencode-sessions.json");
+  const exportDir = path.join(root, "opencode-exports");
+
+  ensureDirectory(binDir);
+  ensureDirectory(path.dirname(opencodeDbPath));
+  ensureDirectory(exportDir);
+
+  fs.writeFileSync(opencodeDbPath, "");
+  fs.writeFileSync(dbQueryPath, JSON.stringify(sessions, null, 2));
+
+  for (const [sessionId, output] of Object.entries(exportsBySession)) {
+    fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
+  }
+
+  const scriptPath = path.join(binDir, "opencode");
+  fs.writeFileSync(
+    scriptPath,
+    `#!/bin/sh
+if [ "$1" = "db" ] && [ "$2" = "path" ]; then
+  printf '%s\\n' "$TEST_OPENCODE_DB_PATH"
+  exit 0
+fi
+if [ "$1" = "db" ]; then
+  cat "$TEST_OPENCODE_DB_QUERY_JSON"
+  exit 0
+fi
+if [ "$1" = "export" ]; then
+  session="$2"
+  file="$TEST_OPENCODE_EXPORT_DIR/$session.json"
+  if [ ! -f "$file" ]; then
+    echo "missing export for $session" >&2
+    exit 1
+  fi
+  printf 'Exporting session: %s\\n' "$session"
+  cat "$file"
+  exit 0
+fi
+echo "unsupported fake opencode command" >&2
+exit 1
+`
+  );
+  fs.chmodSync(scriptPath, 0o755);
+
+  process.env.TEST_OPENCODE_DB_PATH = opencodeDbPath;
+  process.env.TEST_OPENCODE_DB_QUERY_JSON = dbQueryPath;
+  process.env.TEST_OPENCODE_EXPORT_DIR = exportDir;
+  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
 }
 
 test("runImport bootstraps the database and records discovered captures", () => {
@@ -80,13 +152,13 @@ test("runImport bootstraps the database and records discovered captures", () => 
     const messageCount = db.prepare("SELECT COUNT(*) AS count FROM messages").get() as { count: number };
     const activityCount = db.prepare("SELECT COUNT(*) AS count FROM activity_events").get() as { count: number };
 
-    assert.equal(sourceCount.count, 2);
+    assert.equal(sourceCount.count, 3);
     assert.equal(captureCount.count, 2);
     assert.ok(captureRecordCount.count >= 2);
     assert.equal(sessionCount.count, 2);
     assert.ok(messageCount.count >= 2);
     assert.equal(activityCount.count, 2);
-    assert.equal(report.sourceSummaries.length, 2);
+    assert.equal(report.sourceSummaries.length, 3);
 
     db.close();
   });
@@ -104,7 +176,7 @@ test("runImport is idempotent for unchanged raw captures", () => {
 
     assert.equal(captureCount.count, 2);
     assert.equal(second.sourceSummaries.every((summary) => summary.importedCaptures === 0), true);
-    assert.equal(second.sourceSummaries.every((summary) => summary.skippedCaptures >= 1), true);
+    assert.equal(second.sourceSummaries.filter((summary) => summary.kind !== "opencode").every((summary) => summary.skippedCaptures >= 1), true);
 
     db.close();
   });
@@ -169,6 +241,94 @@ test("runImport reimports changed captures and refreshes normalized session cont
       { role: "user", text: "hello codex", ordinal: 1 },
       { role: "assistant", text: "updated answer", ordinal: 2 }
     ]);
+
+    db.close();
+  });
+});
+
+test("runImport imports OpenCode sessions through the fake CLI and keeps failures isolated", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+    writeFakeOpenCodeExecutable(
+      root,
+      [
+        {
+          id: "ses_ok",
+          title: "New session - 2026-03-26T19:15:49.354Z",
+          directory: "/tmp/opencode-demo",
+          version: "1.3.3",
+          time_created: 1774543194067,
+          time_updated: 1774543475213,
+          time_archived: null,
+          share_url: null
+        },
+        {
+          id: "ses_fail",
+          title: "Broken export",
+          directory: "/tmp/opencode-demo",
+          version: "1.3.3",
+          time_created: 1774543194068,
+          time_updated: 1774543475214,
+          time_archived: null,
+          share_url: null
+        }
+      ],
+      {
+        ses_ok: JSON.stringify({
+          info: {
+            id: "ses_ok",
+            directory: "/tmp/opencode-demo",
+            title: "New session - 2026-03-26T19:15:49.354Z",
+            version: "1.3.3",
+            time: { created: 1774543194067, updated: 1774543475213 }
+          },
+          messages: [
+            {
+              info: {
+                id: "msg_user",
+                role: "user",
+                time: { created: 1774543194080 },
+                model: { providerID: "ollama", modelID: "nemotron-cascade-2:30b" }
+              },
+              parts: [{ id: "part_user_text", type: "text", text: "Ship the OpenCode connector" }]
+            },
+            {
+              info: {
+                id: "msg_assistant",
+                role: "assistant",
+                parentID: "msg_user",
+                time: { created: 1774543194090 },
+                providerID: "ollama",
+                modelID: "nemotron-cascade-2:30b"
+              },
+              parts: [
+                { id: "part_reasoning", type: "reasoning", text: "Need to inspect the repo first." },
+                { id: "part_text", type: "text", text: "I will inspect the repo first." }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
+    const session = db
+      .prepare("SELECT title, message_count, model, cli_version FROM sessions WHERE external_session_id = 'ses_ok'")
+      .get() as { title: string; message_count: number; model: string; cli_version: string };
+    const failedCapture = db
+      .prepare("SELECT status, error_text FROM captures WHERE external_session_id = 'ses_fail'")
+      .get() as { status: string; error_text: string | null };
+
+    assert.equal(opencodeSummary?.discoveredCaptures, 2);
+    assert.equal(opencodeSummary?.importedCaptures, 1);
+    assert.equal(session.title, "Ship the OpenCode connector");
+    assert.equal(session.message_count, 3);
+    assert.equal(session.model, "nemotron-cascade-2:30b");
+    assert.equal(session.cli_version, "1.3.3");
+    assert.equal(failedCapture.status, "failed");
+    assert.match(failedCapture.error_text ?? "", /missing export/i);
 
     db.close();
   });

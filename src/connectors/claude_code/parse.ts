@@ -1,6 +1,6 @@
 import path from "node:path";
 import { getClaudeHome } from "../../distill/paths";
-import { readJsonl } from "../../distill/jsonl";
+import { parseJsonlText, readJsonl } from "../../distill/jsonl";
 import {
   DiscoveredCapture,
   NormalizedArtifact,
@@ -8,6 +8,7 @@ import {
   ParsedCapture,
   ParsedCaptureRecord
 } from "../../shared/types";
+import { CaptureSnapshot } from "../types";
 
 function readClaudeHistoryIndex(): Map<string, string> {
   const historyPath = path.join(getClaudeHome(), "history.jsonl");
@@ -81,8 +82,8 @@ function pickClaudeTitle(
   return firstUserMessage.text.split("\n")[0]?.trim().slice(0, 160) || undefined;
 }
 
-export function parseClaudeCodeCapture(capture: DiscoveredCapture): ParsedCapture {
-  const rows = readJsonl(capture.sourcePath);
+export function parseClaudeCodeCapture(capture: DiscoveredCapture, snapshot: CaptureSnapshot): ParsedCapture {
+  const rows = parseJsonlText(snapshot.rawText);
   const historyIndex = readClaudeHistoryIndex();
   const rawRecords: ParsedCaptureRecord[] = [];
   const messages: NormalizedMessage[] = [];

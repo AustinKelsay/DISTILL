@@ -5,7 +5,10 @@ import path from "node:path";
 import test from "node:test";
 import { ensureDirectory } from "../distill/fs";
 import { parseClaudeCodeCapture } from "../connectors/claude_code/parse";
+import { snapshotClaudeCodeCapture } from "../connectors/claude_code/snapshot";
 import { parseCodexCapture } from "../connectors/codex/parse";
+import { snapshotCodexCapture } from "../connectors/codex/snapshot";
+import { parseOpenCodeCapture } from "../connectors/opencode/parse";
 import { DiscoveredCapture } from "../shared/types";
 
 function withTempHomes<T>(fn: (root: string) => T): T {
@@ -83,7 +86,7 @@ test("parseCodexCapture filters bootstrap noise and keeps real chat messages", (
       metadata: {}
     };
 
-    const parsed = parseCodexCapture(capture);
+    const parsed = parseCodexCapture(capture, snapshotCodexCapture(capture));
     assert.equal(parsed.session.title, "Real session");
     assert.equal(parsed.messages.length, 2);
     assert.equal(parsed.messages[0]?.text, "Ship the real feature");
@@ -131,13 +134,15 @@ test("parseCodexCapture skips AGENTS instruction blobs before the real task", ()
       ].join("\n")
     );
 
-    const parsed = parseCodexCapture({
+    const capture: DiscoveredCapture = {
       sourceKind: "codex",
       captureKind: "archived_session",
       sourcePath: capturePath,
       externalSessionId: "session-2",
       metadata: {}
-    });
+    };
+
+    const parsed = parseCodexCapture(capture, snapshotCodexCapture(capture));
 
     assert.equal(parsed.messages.length, 1);
     assert.equal(parsed.messages[0]?.text, "Implement the MCP settings page.");
@@ -175,13 +180,15 @@ test("parseCodexCapture falls back to the first user message for title and captu
       ].join("\n")
     );
 
-    const parsed = parseCodexCapture({
+    const capture: DiscoveredCapture = {
       sourceKind: "codex",
       captureKind: "archived_session",
       sourcePath: capturePath,
       externalSessionId: "session-2",
       metadata: {}
-    });
+    };
+
+    const parsed = parseCodexCapture(capture, snapshotCodexCapture(capture));
 
     assert.equal(parsed.session.title, "Investigate the cache invalidation regression");
     assert.equal(parsed.session.model, "gpt-5.4");
@@ -259,7 +266,7 @@ test("parseClaudeCodeCapture filters command noise and derives a useful title", 
       metadata: { projectFolder: "/tmp/demo" }
     };
 
-    const parsed = parseClaudeCodeCapture(capture);
+    const parsed = parseClaudeCodeCapture(capture, snapshotClaudeCodeCapture(capture));
     assert.equal(parsed.session.title, "Please fix the layout and spacing.");
     assert.equal(parsed.messages.length, 2);
     assert.equal(parsed.messages[0]?.text, "Please fix the layout and spacing.");
@@ -267,4 +274,124 @@ test("parseClaudeCodeCapture filters command noise and derives a useful title", 
     assert.equal(parsed.artifacts.length, 1);
     assert.equal(parsed.artifacts[0]?.kind, "tool_call");
   });
+});
+
+test("parseOpenCodeCapture preserves visible trace parts and falls back from generated titles", () => {
+  const capture: DiscoveredCapture = {
+    sourceKind: "opencode",
+    captureKind: "session_export",
+    sourcePath: "opencode://session/ses_1",
+    externalSessionId: "ses_1",
+    sourceModifiedAt: "2026-03-26T19:24:35.213Z",
+    metadata: {
+      shareUrl: "https://opencode.ai/share/ses_1",
+      timeUpdated: 1774543475213,
+      timeArchived: null
+    }
+  };
+
+  const parsed = parseOpenCodeCapture(capture, {
+    rawText: JSON.stringify({
+      info: {
+        id: "ses_1",
+        slug: "tidy-wizard",
+        projectID: "global",
+        directory: "/tmp/demo",
+        title: "New session - 2026-03-26T19:15:49.354Z",
+        version: "1.3.3",
+        time: {
+          created: 1774543194067,
+          updated: 1774543475213
+        }
+      },
+      messages: [
+        {
+          info: {
+            id: "msg_user",
+            role: "user",
+            time: { created: 1774543194080 },
+            model: { providerID: "ollama", modelID: "nemotron-cascade-2:30b" }
+          },
+          parts: [
+            { id: "part_user_text", type: "text", text: "Do I have a project for VisiBible in GTDspace?" }
+          ]
+        },
+        {
+          info: {
+            id: "msg_assistant",
+            role: "assistant",
+            parentID: "msg_user",
+            time: { created: 1774543194090 },
+            providerID: "ollama",
+            modelID: "nemotron-cascade-2:30b"
+          },
+          parts: [
+            { id: "part_step_start", type: "step-start" },
+            { id: "part_reasoning", type: "reasoning", text: "We should search GTDspace first." },
+            {
+              id: "part_tool",
+              type: "tool",
+              tool: "gtdspace_workspace_search",
+              callID: "call_1",
+              state: {
+                status: "completed",
+                title: "Search workspace",
+                output: "{\"matches\":[]}",
+                attachments: [
+                  {
+                    type: "file",
+                    mime: "text/plain",
+                    filename: "report.txt",
+                    url: "file:///tmp/demo/report.txt"
+                  }
+                ]
+              }
+            },
+            {
+              id: "part_file",
+              type: "file",
+              mime: "text/plain",
+              filename: "input.txt",
+              url: "file:///tmp/demo/input.txt",
+              source: {
+                type: "file",
+                path: "/tmp/demo/input.txt"
+              }
+            },
+            {
+              id: "part_text",
+              type: "text",
+              text: "Yes. Your GTDSpace includes a project named Visibible."
+            },
+            {
+              id: "part_step_finish",
+              type: "step-finish",
+              reason: "stop",
+              tokens: { input: 12, output: 34, reasoning: 0, cache: { read: 0, write: 0 } }
+            }
+          ]
+        }
+      ]
+    }),
+    rawSha256: "sha",
+    sourceModifiedAt: "2026-03-26T19:24:35.213Z",
+    sourceSizeBytes: 100
+  });
+
+  assert.equal(parsed.session.title, "Do I have a project for VisiBible in GTDspace?");
+  assert.equal(parsed.session.sourceUrl, "https://opencode.ai/share/ses_1");
+  assert.equal(parsed.session.model, "nemotron-cascade-2:30b");
+  assert.equal(parsed.session.modelProvider, "ollama");
+  assert.deepEqual(parsed.messages.map((message) => ({ role: message.role, kind: message.messageKind })), [
+    { role: "user", kind: "text" },
+    { role: "assistant", kind: "meta" },
+    { role: "assistant", kind: "meta" },
+    { role: "tool", kind: "meta" },
+    { role: "assistant", kind: "meta" },
+    { role: "assistant", kind: "text" },
+    { role: "assistant", kind: "meta" }
+  ]);
+  assert.equal(parsed.messages[2]?.text, "We should search GTDspace first.");
+  assert.match(parsed.messages[3]?.text ?? "", /\[tool:completed\]/);
+  assert.deepEqual(parsed.artifacts.map((artifact) => artifact.kind), ["tool_call", "tool_result", "file", "file"]);
 });

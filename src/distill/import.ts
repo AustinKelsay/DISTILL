@@ -1,17 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
-import { detectClaudeCodeSource } from "../connectors/claude_code/detect";
-import { discoverClaudeCodeCaptures } from "../connectors/claude_code/discover";
-import { parseClaudeCodeCapture } from "../connectors/claude_code/parse";
-import { detectCodexSource } from "../connectors/codex/detect";
-import { discoverCodexCaptures } from "../connectors/codex/discover";
-import { parseCodexCapture } from "../connectors/codex/parse";
-import { getFileSha256, getTextSha1 } from "./fs";
+import { sourceConnectors } from "../connectors";
+import { CaptureSnapshot, SourceConnector } from "../connectors/types";
+import { getTextSha1, getTextSha256 } from "./fs";
 import {
   findCapture,
   insertCaptureRecords,
   openDistillDatabase,
   replaceSessionArtifacts,
   replaceSessionMessages,
+  updateCaptureFailure,
   updateCaptureStatus,
   upsertSession,
   upsertSource
@@ -25,7 +22,7 @@ function insertCapture(
   db: DatabaseSync,
   sourceId: number,
   capture: DiscoveredCapture,
-  rawSha256: string
+  snapshot: Pick<CaptureSnapshot, "rawSha256" | "sourceModifiedAt" | "sourceSizeBytes">
 ): number {
   const result = db
     .prepare(`
@@ -49,9 +46,9 @@ function insertCapture(
       capture.captureKind,
       capture.externalSessionId ?? null,
       capture.sourcePath,
-      capture.sourceModifiedAt ?? null,
-      capture.sourceSizeBytes ?? null,
-      rawSha256,
+      snapshot.sourceModifiedAt ?? capture.sourceModifiedAt ?? null,
+      snapshot.sourceSizeBytes ?? capture.sourceSizeBytes ?? null,
+      snapshot.rawSha256,
       JSON.stringify({
         sourceKind: capture.sourceKind,
         metadata: capture.metadata
@@ -84,6 +81,7 @@ function insertCapture(
 
 function importSourceCaptures(
   db: DatabaseSync,
+  connector: SourceConnector,
   source: DiscoveredSource,
   sourceId: number,
   captures: DiscoveredCapture[]
@@ -93,47 +91,82 @@ function importSourceCaptures(
   const imported: ImportedCapture[] = [];
 
   for (const capture of captures) {
-    const rawSha256 = getFileSha256(capture.sourcePath);
-    const existingCapture = findCapture(db, sourceId, capture.sourcePath, rawSha256);
+    let snapshot: CaptureSnapshot;
+
+    try {
+      snapshot = connector.snapshotCapture(capture);
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      const failedSnapshot = {
+        rawSha256: getTextSha256(`snapshot-failure:${capture.sourcePath}:${capture.sourceModifiedAt ?? ""}:${errorText}`),
+        sourceModifiedAt: capture.sourceModifiedAt,
+        sourceSizeBytes: capture.sourceSizeBytes
+      };
+      const captureId =
+        findCapture(db, sourceId, capture.sourcePath, failedSnapshot.rawSha256)?.id
+        ?? insertCapture(db, sourceId, capture, failedSnapshot);
+      updateCaptureFailure(db, captureId, errorText);
+      imported.push({
+        sourcePath: capture.sourcePath,
+        externalSessionId: capture.externalSessionId,
+        rawSha256: failedSnapshot.rawSha256,
+        skipped: false
+      });
+      continue;
+    }
+
+    const existingCapture = findCapture(db, sourceId, capture.sourcePath, snapshot.rawSha256);
 
     if (existingCapture && existingCapture.status === "normalized") {
       skippedCaptures += 1;
       imported.push({
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
-        rawSha256,
+        rawSha256: snapshot.rawSha256,
         skipped: true
       });
       continue;
     }
 
-    const captureId = existingCapture?.id ?? insertCapture(db, sourceId, capture, rawSha256);
-    const parsedCapture =
-      capture.sourceKind === "codex" ? parseCodexCapture(capture) : parseClaudeCodeCapture(capture);
+    const captureId = existingCapture?.id ?? insertCapture(db, sourceId, capture, snapshot);
 
-    const captureRecordIdsByLine = insertCaptureRecords(db, captureId, parsedCapture.rawRecords);
-    const sessionId = upsertSession(db, sourceId, parsedCapture.session, parsedCapture.messages.length);
+    try {
+      const parsedCapture = connector.parseCapture(capture, snapshot);
 
-    replaceSessionMessages(
-      db,
-      sessionId,
-      parsedCapture.messages.map((message) => ({
-        ...message,
-        metadata: {
-          ...message.metadata,
-          textHash: getTextSha1(message.text)
-        }
-      })),
-      captureRecordIdsByLine
-    );
-    replaceSessionArtifacts(db, sessionId, parsedCapture.artifacts, captureRecordIdsByLine);
-    updateCaptureStatus(db, captureId, "normalized");
+      const captureRecordIdsByLine = insertCaptureRecords(db, captureId, parsedCapture.rawRecords);
+      const sessionId = upsertSession(db, sourceId, parsedCapture.session, parsedCapture.messages.length);
+
+      replaceSessionMessages(
+        db,
+        sessionId,
+        parsedCapture.messages.map((message) => ({
+          ...message,
+          metadata: {
+            ...message.metadata,
+            textHash: getTextSha1(message.text)
+          }
+        })),
+        captureRecordIdsByLine
+      );
+      replaceSessionArtifacts(db, sessionId, parsedCapture.artifacts, captureRecordIdsByLine);
+      updateCaptureStatus(db, captureId, "normalized");
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      updateCaptureFailure(db, captureId, errorText);
+      imported.push({
+        sourcePath: capture.sourcePath,
+        externalSessionId: capture.externalSessionId,
+        rawSha256: snapshot.rawSha256,
+        skipped: false
+      });
+      continue;
+    }
 
     importedCaptures += 1;
     imported.push({
       sourcePath: capture.sourcePath,
       externalSessionId: capture.externalSessionId,
-      rawSha256,
+      rawSha256: snapshot.rawSha256,
       skipped: false
     });
   }
@@ -149,29 +182,23 @@ export function runImport(): ImportReport {
   const distillDb = openDistillDatabase();
   try {
     const sourcesWithCaptures: Array<{
+      connector: SourceConnector;
       source: DiscoveredSource;
       captures: DiscoveredCapture[];
-    }> = [
-      {
-        source: detectCodexSource(),
-        captures: discoverCodexCaptures().sort((a, b) =>
+    }> = sourceConnectors.map((connector) => ({
+      connector,
+      source: connector.detect(),
+      captures: connector.discoverCaptures().sort((a, b) =>
           (a.sourceModifiedAt ?? "").localeCompare(b.sourceModifiedAt ?? "")
         )
-      },
-      {
-        source: detectClaudeCodeSource(),
-        captures: discoverClaudeCodeCaptures().sort((a, b) =>
-          (a.sourceModifiedAt ?? "").localeCompare(b.sourceModifiedAt ?? "")
-        )
-      }
-    ];
+    }));
 
     const sourceSummaries: ImportReport["sourceSummaries"] = [];
     const captures: ImportedCapture[] = [];
 
     for (const entry of sourcesWithCaptures) {
       const sourceId = upsertSource(distillDb.db, entry.source);
-      const result = importSourceCaptures(distillDb.db, entry.source, sourceId, entry.captures);
+      const result = importSourceCaptures(distillDb.db, entry.connector, entry.source, sourceId, entry.captures);
 
       sourceSummaries.push({
         kind: entry.source.kind,

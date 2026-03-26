@@ -98,6 +98,12 @@ export function getFileSha256(filePath: string): string {
   return hash.digest("hex");
 }
 
+export function getTextSha256(text: string): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(text);
+  return hash.digest("hex");
+}
+
 export function getTextSha1(text: string): string {
   const hash = crypto.createHash("sha1");
   hash.update(text);

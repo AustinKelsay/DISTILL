@@ -30,6 +30,7 @@ type SessionMessageRow = {
   role: string;
   text: string;
   created_at: string | null;
+  message_kind: "text" | "meta";
 };
 
 type SessionTagRow = {
@@ -144,6 +145,14 @@ function payloadText(payload: Record<string, unknown>): string | undefined {
     return payload.text.trim();
   }
 
+  if (typeof payload.output === "string" && payload.output.trim()) {
+    return payload.output.trim();
+  }
+
+  if (typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error.trim();
+  }
+
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -164,13 +173,24 @@ function payloadText(payload: Record<string, unknown>): string | undefined {
 
 function summarizeArtifact(row: SessionArtifactRow, payload: Record<string, unknown>): string {
   if (row.kind === "tool_call") {
-    const name = typeof payload.name === "string" ? payload.name : undefined;
+    const name =
+      typeof payload.name === "string" ? payload.name
+      : typeof payload.tool === "string" ? payload.tool : undefined;
     return name ? `Tool call: ${name}` : "Tool call";
   }
 
   if (row.kind === "tool_result") {
     const text = cleanExcerpt(payloadText(payload), 140);
     return text ? `Tool result: ${text}` : "Tool result";
+  }
+
+  if (row.kind === "file") {
+    const name =
+      typeof payload.filename === "string" ? payload.filename
+      : payload.source && typeof payload.source === "object" && typeof (payload.source as { path?: unknown }).path === "string"
+        ? ((payload.source as { path: string }).path)
+        : undefined;
+    return name ? `File: ${name}` : "File artifact";
   }
 
   if (row.kind === "image") {
@@ -225,6 +245,7 @@ export function listRecentSessions(limit = 24): SessionListItem[] {
             FROM messages m
             WHERE m.session_id = s.id
             AND m.role = 'user'
+            AND m.message_kind = 'text'
             ORDER BY m.ordinal ASC
             LIMIT 1
           ) AS first_user_text,
@@ -233,6 +254,7 @@ export function listRecentSessions(limit = 24): SessionListItem[] {
             FROM messages m
             WHERE m.session_id = s.id
             AND m.role = 'assistant'
+            AND m.message_kind = 'text'
             ORDER BY m.ordinal ASC
             LIMIT 1
           ) AS first_assistant_text
@@ -278,6 +300,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
             FROM messages m
             WHERE m.session_id = s.id
             AND m.role = 'user'
+            AND m.message_kind = 'text'
             ORDER BY m.ordinal ASC
             LIMIT 1
           ) AS first_user_text,
@@ -286,6 +309,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
             FROM messages m
             WHERE m.session_id = s.id
             AND m.role = 'assistant'
+            AND m.message_kind = 'text'
             ORDER BY m.ordinal ASC
             LIMIT 1
           ) AS first_assistant_text,
@@ -306,7 +330,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
 
     const messages = distillDb.db
       .prepare(`
-        SELECT id, ordinal, role, text, created_at
+        SELECT id, ordinal, role, text, created_at, message_kind
         FROM messages
         WHERE session_id = ?
         ORDER BY ordinal ASC
@@ -389,7 +413,8 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
           ordinal: message.ordinal,
           role: message.role,
           text: message.text,
-          createdAt: message.created_at ?? undefined
+          createdAt: message.created_at ?? undefined,
+          messageKind: message.message_kind
         })
       )
     };
@@ -449,6 +474,7 @@ export function searchSessions(query: string, limit = 20): SearchResult[] {
             FROM messages m
             WHERE m.session_id = s.id
             AND m.role = 'user'
+            AND m.message_kind = 'text'
             ORDER BY m.ordinal ASC
             LIMIT 1
           ) AS first_user_text

@@ -13,10 +13,10 @@ test("doctor report returns the expected source kinds", () => {
   const report = buildDoctorReport();
 
   assert.equal(typeof report.scannedAt, "string");
-  assert.equal(report.sources.length, 2);
+  assert.equal(report.sources.length, 3);
 
   const kinds = report.sources.map((source) => source.kind).sort();
-  assert.deepEqual(kinds, ["claude_code", "codex"]);
+  assert.deepEqual(kinds, ["claude_code", "codex", "opencode"]);
 
   for (const source of report.sources) {
     assert.ok(source.displayName.length > 0);

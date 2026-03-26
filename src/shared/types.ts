@@ -1,4 +1,4 @@
-export type SourceKind = "codex" | "claude_code";
+export type SourceKind = "codex" | "claude_code" | "opencode";
 
 export type InstallStatus = "installed" | "not_found" | "partial";
 
@@ -133,6 +133,9 @@ export type AppSettingsSnapshot = {
   databasePath: string;
   codexHome: string;
   claudeHome: string;
+  opencodeDatabasePath: string;
+  opencodeConfigDir: string;
+  opencodeStateDir: string;
   sourceKinds: SourceKind[];
   defaultLabels: string[];
   backgroundSyncIntervalMinutes: number;
@@ -140,6 +143,7 @@ export type AppSettingsSnapshot = {
     distillHome: boolean;
     codexHome: boolean;
     claudeHome: boolean;
+    opencodeConfigDir: boolean;
   };
 };
 
@@ -189,6 +193,7 @@ export type SessionDetailMessage = {
   role: string;
   text: string;
   createdAt?: string;
+  messageKind: "text" | "meta";
 };
 
 export type SessionArtifact = {
