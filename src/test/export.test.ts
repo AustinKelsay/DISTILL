@@ -65,3 +65,32 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
     assert.equal(payload.turn_pairs[0].assistant, "Here is a tighter launch draft.");
   });
 });
+
+test("exportSessionsByLabel trims and normalizes the requested label", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'claude_code', 'Claude Code', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (41, 1, 'session-export-2', 'Normalize me', '/tmp/demo', '2026-03-25T16:00:00Z', 1, 1, '{}')
+    `).run();
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+    toggleSessionLabel(41, "train");
+
+    const report = exportSessionsByLabel("  TRAIN  ");
+    assert.equal(report.label, "train");
+    assert.equal(report.recordCount, 1);
+    assert.match(path.basename(report.outputPath), /^train-sessions-/);
+  });
+});

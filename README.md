@@ -74,6 +74,12 @@ Claude Code:
 
 Both connectors preserve raw records and derive user-facing transcript messages from filtered subsets of those event streams.
 
+Operational notes:
+
+- `npm run export` defaults to the `train` label if no label is provided.
+- Search tolerates punctuation-heavy input such as quoted text and dashed tokens.
+- The Electron renderer escapes transcript and metadata text before injecting it into the UI.
+
 ## Commands
 
 Install dependencies:
@@ -104,6 +110,14 @@ Export labeled sessions as JSONL:
 
 ```bash
 npm run export -- train
+```
+
+Show command help:
+
+```bash
+npm run doctor -- --help
+npm run import -- --help
+npm run export -- --help
 ```
 
 Run tests:
