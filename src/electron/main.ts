@@ -6,8 +6,9 @@ import {
   markStaleRunningSyncJobsFailed,
   runNextSourceSyncJob
 } from "../distill/jobs";
+import { BACKGROUND_SYNC_INTERVAL_MINUTES } from "../distill/settings";
 
-const BACKGROUND_SYNC_INTERVAL_MS = 2 * 60 * 1000;
+const BACKGROUND_SYNC_INTERVAL_MS = BACKGROUND_SYNC_INTERVAL_MINUTES * 60 * 1000;
 
 let mainWindow: BrowserWindow | null = null;
 let backgroundSyncTimer: NodeJS.Timeout | undefined;
@@ -23,11 +24,12 @@ function createMainWindow(): void {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: false
     }
   });
 
-  mainWindow.loadFile(path.join(process.cwd(), "static", "index.html"));
+  mainWindow.loadFile(path.join(app.getAppPath(), "static", "index.html"));
 }
 
 function broadcastBackgroundSyncStatus(): void {

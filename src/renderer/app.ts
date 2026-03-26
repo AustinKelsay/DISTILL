@@ -1,4 +1,5 @@
 import {
+  AppSettingsSnapshot,
   BackgroundSyncStatus,
   DashboardData,
   DoctorReport,
@@ -9,7 +10,6 @@ import {
   SessionDetail,
   SessionListItem
 } from "../shared/types";
-import { escapeHtml } from "../shared/html";
 
 declare global {
   interface Window {
@@ -23,6 +23,7 @@ declare global {
       toggleSessionLabel: (sessionId: number, labelName: string) => void;
       getDefaultLabelNames: () => string[];
       exportSessionsByLabel: (label: string) => ExportReport;
+      getAppSettings: () => AppSettingsSnapshot;
       getBackgroundSyncStatus: () => Promise<BackgroundSyncStatus>;
       requestBackgroundSync: () => Promise<BackgroundSyncStatus>;
       onBackgroundSyncStatus: (listener: (status: BackgroundSyncStatus) => void) => () => void;
@@ -34,8 +35,18 @@ let dashboardData: DashboardData | null = null;
 let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 let syncStatusUnsubscribe: (() => void) | null = null;
+let isSettingsOpen = false;
 
 /* Helpers */
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function timeAgo(dateStr: string | undefined): string {
   if (!dateStr) return "-";
@@ -57,6 +68,10 @@ function showExportToast(message: string): void {
   el.classList.add("visible");
   if (exportTimeout) clearTimeout(exportTimeout);
   exportTimeout = setTimeout(() => el.classList.remove("visible"), 4000);
+}
+
+function renderHelpTip(text: string, label = "?"): string {
+  return `<button class="help-tip" type="button" data-help-tip="${escapeHtml(text)}" aria-label="${escapeHtml(text)}">${escapeHtml(label)}</button>`;
 }
 
 function renderSyncStatus(status: BackgroundSyncStatus): void {
@@ -93,7 +108,7 @@ function renderSource(source: DiscoveredSource): string {
   return `
     <div class="source-row">
       <span class="status-dot ${dot}"></span>
-      <span class="source-name">${escapeHtml(source.displayName)}</span>
+      <span class="source-name">${escapeHtml(source.displayName)} ${renderHelpTip(`Distill checks whether ${source.displayName} is installed locally and whether its expected data directories are present.`)}</span>
       <span class="source-path">${escapeHtml(source.dataRoot ?? "not found")}</span>
     </div>
     <div class="source-checks">${checks}</div>
@@ -152,6 +167,52 @@ function renderArtifact(artifact: SessionArtifact): string {
   `;
 }
 
+function renderSettingsPanel(settings: AppSettingsSnapshot): string {
+  const labels = settings.defaultLabels.map((label) => `<span class="chip chip-static">${escapeHtml(label)}</span>`).join("");
+  const sources = settings.sourceKinds.map((source) =>
+    `<div class="settings-row"><span>${escapeHtml(source)}</span><span class="settings-note">enabled</span></div>`
+  ).join("");
+
+  return `
+    <div class="settings-overlay ${isSettingsOpen ? "visible" : ""}" data-settings-overlay>
+      <section class="settings-panel" aria-hidden="${isSettingsOpen ? "false" : "true"}">
+        <div class="settings-header">
+          <div>
+            <div class="section-title">Settings</div>
+            <div class="settings-subtitle">Initial draft. Read-only for now.</div>
+          </div>
+          <button class="btn" type="button" data-settings-close>close</button>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Storage ${renderHelpTip("These are the local folders and database Distill is currently using. Environment variable overrides are shown so path issues are easier to diagnose.")}</div>
+          <div class="settings-code">${escapeHtml(settings.distillHome)}</div>
+          <div class="settings-row"><span>Database</span><span class="settings-note">${escapeHtml(settings.databasePath)}</span></div>
+          <div class="settings-row"><span>DISTILL_HOME override</span><span class="settings-note">${settings.envOverrides.distillHome ? "on" : "off"}</span></div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Sources ${renderHelpTip("Distill currently reads from local Codex CLI and Claude Code histories. These paths are where it expects to find those source files.")}</div>
+          ${sources}
+          <div class="settings-row"><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
+          <div class="settings-row"><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Sync ${renderHelpTip("Distill imports on startup and then checks for local changes on a fixed interval while the app is open.")}</div>
+          <div class="settings-row"><span>Background interval</span><span class="settings-note">every ${settings.backgroundSyncIntervalMinutes} min</span></div>
+          <div class="settings-row"><span>Manual sync</span><span class="settings-note">top bar button</span></div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Curation ${renderHelpTip("Labels are used for lightweight review states and export filters. They do not change the underlying transcript.")}</div>
+          <div class="settings-chip-row">${labels}</div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 /* Session detail pane */
 
 function renderSessionDetail(detail: SessionDetail | undefined): void {
@@ -159,7 +220,14 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
   if (!root) return;
 
   if (!detail) {
-    root.innerHTML = `<div class="detail-empty">Select a session</div>`;
+    root.innerHTML = `
+      <div class="detail-empty">
+        <div class="empty-state">
+          <div class="empty-title">Select a session</div>
+          <div class="empty-copy">Choose a conversation from the left to inspect the transcript, labels, tags, and artifacts.</div>
+        </div>
+      </div>
+    `;
     activeSessionId = null;
     return;
   }
@@ -207,13 +275,14 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
         <span>${detail.sourceKind === "claude_code" ? "claude" : "codex"}</span>
         ${detail.model ? `<span>${escapeHtml(detail.model)}</span>` : ""}
         <span>${detail.messageCount} msgs</span>
-        <span>${detail.artifactCount} artifacts</span>
+        <span>${detail.artifactCount} artifacts ${renderHelpTip("Artifacts are non-message payloads such as images, tool calls, and tool results extracted from the raw capture.")}</span>
         ${detail.gitBranch ? `<span>\u2387 ${escapeHtml(detail.gitBranch)}</span>` : ""}
         ${detail.projectPath ? `<span>${escapeHtml(detail.projectPath)}</span>` : ""}
         <span>${timeAgo(detail.updatedAt)}</span>
       </div>
     </div>
     <div class="curation-bar">
+      ${renderHelpTip("Use labels as lightweight review states for later export or filtering.")}
       ${labelChips}
       <span class="sep"></span>
       ${tagChips}
@@ -350,6 +419,45 @@ function bindSourcesToggle(): void {
   };
 }
 
+function bindHelpTips(): void {
+  for (const tip of document.querySelectorAll<HTMLElement>("[data-help-tip]")) {
+    tip.onclick = () => {
+      const text = tip.dataset.helpTip;
+      if (!text) return;
+      showExportToast(text);
+    };
+  }
+}
+
+function bindSettingsPanel(): void {
+  const openBtn = document.querySelector<HTMLElement>("[data-settings-open]");
+  const closeBtn = document.querySelector<HTMLElement>("[data-settings-close]");
+  const overlay = document.querySelector<HTMLElement>("[data-settings-overlay]");
+
+  if (openBtn) {
+    openBtn.onclick = () => {
+      isSettingsOpen = true;
+      renderReport(window.distillApi.getDashboardData());
+    };
+  }
+
+  if (closeBtn) {
+    closeBtn.onclick = () => {
+      isSettingsOpen = false;
+      renderReport(window.distillApi.getDashboardData());
+    };
+  }
+
+  if (overlay) {
+    overlay.onclick = (event) => {
+      if (event.target === overlay) {
+        isSettingsOpen = false;
+        renderReport(window.distillApi.getDashboardData());
+      }
+    };
+  }
+}
+
 function refreshDashboard(): void {
   dashboardData = window.distillApi.getDashboardData();
   renderReport(dashboardData);
@@ -378,8 +486,9 @@ function renderReport(report: DashboardData): void {
   const countEl = document.querySelector<HTMLElement>("[data-session-count]");
   const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
   const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
+  const settingsRoot = document.querySelector<HTMLElement>("[data-settings-root]");
 
-  if (!sources || !sessionsEl) return;
+  if (!sources || !sessionsEl || !settingsRoot) return;
 
   const totalSessions = report.sessions.length;
   const totalMessages = report.sessions.reduce((sum, session) => sum + session.messageCount, 0);
@@ -402,12 +511,15 @@ function renderReport(report: DashboardData): void {
   }
 
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
+  settingsRoot.innerHTML = renderSettingsPanel(window.distillApi.getAppSettings());
   const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
   const items = query ? window.distillApi.searchSessions(query) : report.sessions;
   renderSessionList(items);
   bindSearch(report);
   bindExportActions();
   bindSourcesToggle();
+  bindHelpTips();
+  bindSettingsPanel();
 
   if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;
 

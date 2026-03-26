@@ -3,7 +3,8 @@ import { addSessionTag, getDefaultLabelNames, removeSessionTag, toggleSessionLab
 import { buildDoctorReport } from "../distill/doctor";
 import { exportSessionsByLabel } from "../distill/export";
 import { getDashboardData, getSessionDetail, searchSessions } from "../distill/query";
-import { BackgroundSyncStatus } from "../shared/types";
+import { getAppSettingsSnapshot } from "../distill/settings";
+import { AppSettingsSnapshot, BackgroundSyncStatus } from "../shared/types";
 
 contextBridge.exposeInMainWorld("distillApi", {
   getDoctorReport: () => buildDoctorReport(),
@@ -15,6 +16,7 @@ contextBridge.exposeInMainWorld("distillApi", {
   toggleSessionLabel: (sessionId: number, labelName: string) => toggleSessionLabel(sessionId, labelName),
   getDefaultLabelNames: () => getDefaultLabelNames(),
   exportSessionsByLabel: (label: string) => exportSessionsByLabel(label),
+  getAppSettings: () => getAppSettingsSnapshot() as AppSettingsSnapshot,
   getBackgroundSyncStatus: () =>
     ipcRenderer.invoke("distill:get-background-sync-status") as Promise<BackgroundSyncStatus>,
   requestBackgroundSync: () =>

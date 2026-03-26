@@ -131,6 +131,29 @@
       .btn:hover { border-color: rgba(61, 191, 154, 0.3); }
       .btn:active { background: var(--ok-bg); }
 
+      .help-tip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 1px solid rgba(61, 191, 154, 0.26);
+        background: rgba(61, 191, 154, 0.08);
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 10px;
+        line-height: 1;
+        cursor: pointer;
+        vertical-align: middle;
+        margin-left: 4px;
+      }
+
+      .help-tip:hover {
+        background: rgba(61, 191, 154, 0.14);
+        border-color: rgba(61, 191, 154, 0.45);
+      }
+
       /* ── Onboarding banner (hidden by default, shown via JS) ── */
       .onboarding {
         display: none;
@@ -248,6 +271,22 @@
         height: 100%;
         color: var(--dim);
         font-size: 14px;
+      }
+
+      .empty-state {
+        max-width: 320px;
+        text-align: center;
+      }
+
+      .empty-title {
+        font-size: 18px;
+        color: var(--ink);
+        margin-bottom: 8px;
+      }
+
+      .empty-copy {
+        color: var(--muted);
+        line-height: 1.6;
       }
 
       .detail-toolbar {
@@ -403,6 +442,102 @@
         font-size: 11px;
         line-height: 1.5;
         overflow-x: auto;
+      }
+
+      .settings-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(16, 16, 20, 0.56);
+        backdrop-filter: blur(8px);
+        z-index: 90;
+        display: none;
+        align-items: stretch;
+        justify-content: flex-end;
+      }
+
+      .settings-overlay.visible {
+        display: flex;
+      }
+
+      .settings-panel {
+        width: min(460px, 100vw);
+        height: 100vh;
+        background: linear-gradient(180deg, rgba(34, 34, 38, 0.98) 0%, rgba(26, 26, 30, 0.98) 100%);
+        border-left: 1px solid rgba(58, 58, 62, 0.8);
+        padding: 22px 20px 28px;
+        overflow-y: auto;
+        box-shadow: -24px 0 60px rgba(0, 0, 0, 0.32);
+      }
+
+      .settings-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 18px;
+      }
+
+      .settings-subtitle {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .settings-section {
+        border: 1px solid rgba(58, 58, 62, 0.65);
+        border-radius: 10px;
+        background: rgba(34, 34, 38, 0.7);
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+
+      .settings-section-title {
+        color: var(--ink);
+        font-weight: 600;
+        margin-bottom: 10px;
+      }
+
+      .settings-code {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink);
+        background: rgba(26, 26, 30, 0.7);
+        border: 1px solid rgba(58, 58, 62, 0.5);
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 10px;
+        word-break: break-all;
+      }
+
+      .settings-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 0;
+        border-top: 1px solid rgba(58, 58, 62, 0.35);
+      }
+
+      .settings-row:first-of-type {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .settings-note {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 11px;
+        text-align: right;
+        word-break: break-word;
+      }
+
+      .settings-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .chip-static {
+        cursor: default;
       }
 
       .msg {
@@ -570,9 +705,11 @@
         placeholder="Search sessions…"
         data-search-input
       />
+      <button class="help-tip" type="button" data-help-tip="Search across imported session titles and transcript text. Clear the search box to return to your recent sessions.">?</button>
       <div class="topbar-stats" data-stats></div>
       <div class="topbar-actions">
         <span class="topbar-sync" data-sync-status data-state="idle">idle</span>
+        <button class="btn" data-settings-open>settings</button>
         <button class="btn" data-sync-now>↻ sync</button>
         <button class="btn" data-export-label="train">↑ train</button>
         <button class="btn" data-export-label="holdout">↑ holdout</button>
@@ -592,6 +729,7 @@
       <aside class="sidebar">
         <div class="sidebar-header">
           <span data-session-count>Sessions</span>
+          <button class="help-tip" type="button" data-help-tip="The left column shows your most recent imported sessions. Click one to inspect its transcript and metadata.">?</button>
           <span data-scanned-at></span>
         </div>
         <div data-sessions></div>
@@ -607,7 +745,12 @@
     </div>
 
     <div class="export-status" data-export-status></div>
+    <div data-settings-root></div>
 
+    <script>
+      var exports = {};
+      var module = { exports };
+    </script>
     <script src="../dist/renderer/app.js"></script>
   </body>
 </html>

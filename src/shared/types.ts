@@ -128,6 +128,21 @@ export type BackgroundSyncStatus = {
   errorText?: string;
 };
 
+export type AppSettingsSnapshot = {
+  distillHome: string;
+  databasePath: string;
+  codexHome: string;
+  claudeHome: string;
+  sourceKinds: SourceKind[];
+  defaultLabels: string[];
+  backgroundSyncIntervalMinutes: number;
+  envOverrides: {
+    distillHome: boolean;
+    codexHome: boolean;
+    claudeHome: boolean;
+  };
+};
+
 export type SessionListItem = {
   id: number;
   sourceKind: SourceKind;
