@@ -395,3 +395,59 @@ test("parseOpenCodeCapture preserves visible trace parts and falls back from gen
   assert.match(parsed.messages[3]?.text ?? "", /\[tool:completed\]/);
   assert.deepEqual(parsed.artifacts.map((artifact) => artifact.kind), ["tool_call", "tool_result", "file", "file"]);
 });
+
+test("parseOpenCodeCapture keeps the last populated assistant model when later messages omit model metadata", () => {
+  const capture: DiscoveredCapture = {
+    sourceKind: "opencode",
+    captureKind: "session_export",
+    sourcePath: "opencode://session/ses_2",
+    externalSessionId: "ses_2",
+    metadata: {}
+  };
+
+  const parsed = parseOpenCodeCapture(capture, {
+    rawText: JSON.stringify({
+      info: {
+        id: "ses_2",
+        title: "Model retention"
+      },
+      messages: [
+        {
+          info: {
+            id: "msg_user",
+            role: "user",
+            time: { created: 1774543194080 },
+            model: { providerID: "ollama", modelID: "draft-model" }
+          },
+          parts: [{ id: "part_user", type: "text", text: "Keep the detected assistant model" }]
+        },
+        {
+          info: {
+            id: "msg_assistant_1",
+            role: "assistant",
+            parentID: "msg_user",
+            time: { created: 1774543194090 },
+            providerID: "openai",
+            modelID: "final-model"
+          },
+          parts: [{ id: "part_assistant_1", type: "text", text: "Using the final model." }]
+        },
+        {
+          info: {
+            id: "msg_assistant_2",
+            role: "assistant",
+            parentID: "msg_assistant_1",
+            time: { created: 1774543195000 }
+          },
+          parts: [{ id: "part_assistant_2", type: "text", text: "Continuing without model metadata." }]
+        }
+      ]
+    }),
+    rawSha256: "sha-2",
+    sourceModifiedAt: "2026-03-26T19:24:35.213Z",
+    sourceSizeBytes: 120
+  });
+
+  assert.equal(parsed.session.model, "final-model");
+  assert.equal(parsed.session.modelProvider, "openai");
+});

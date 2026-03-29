@@ -18,6 +18,11 @@ export type OpenCodeSessionRow = {
   share_url?: string | null;
 };
 
+const OPEN_CODE_DB_PATH_TIMEOUT_MS = 5_000;
+const OPEN_CODE_DB_PATH_MAX_BUFFER = 64 * 1024;
+const OPEN_CODE_COMMAND_TIMEOUT_MS = 15_000;
+const OPEN_CODE_COMMAND_MAX_BUFFER = 16 * 1024 * 1024;
+
 export function getOpenCodeExecutablePath(): string | undefined {
   return findExecutable("opencode");
 }
@@ -26,7 +31,9 @@ export function getOpenCodeDatabasePath(executablePath = getOpenCodeExecutablePa
   if (executablePath) {
     try {
       const result = execFileSync(executablePath, ["db", "path"], {
-        encoding: "utf8"
+        encoding: "utf8",
+        timeout: OPEN_CODE_DB_PATH_TIMEOUT_MS,
+        maxBuffer: OPEN_CODE_DB_PATH_MAX_BUFFER
       }).trim();
       if (result) {
         return result;
@@ -53,7 +60,9 @@ export function runOpenCodeCommand(args: string[], executablePath = getOpenCodeE
   }
 
   return execFileSync(executablePath, args, {
-    encoding: "utf8"
+    encoding: "utf8",
+    timeout: OPEN_CODE_COMMAND_TIMEOUT_MS,
+    maxBuffer: OPEN_CODE_COMMAND_MAX_BUFFER
   });
 }
 

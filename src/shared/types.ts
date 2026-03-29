@@ -34,11 +34,15 @@ export type DiscoveredCapture = {
   metadata: Record<string, unknown>;
 };
 
+export type ImportedCaptureStatus = "imported" | "failed" | "skipped";
+
 export type ImportedCapture = {
   sourcePath: string;
   externalSessionId?: string;
   rawSha256: string;
   skipped: boolean;
+  status: ImportedCaptureStatus;
+  errorText?: string;
 };
 
 export type ParsedCaptureRecord = {

@@ -110,7 +110,9 @@ function importSourceCaptures(
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
         rawSha256: failedSnapshot.rawSha256,
-        skipped: false
+        skipped: false,
+        status: "failed",
+        errorText
       });
       continue;
     }
@@ -123,7 +125,8 @@ function importSourceCaptures(
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
         rawSha256: snapshot.rawSha256,
-        skipped: true
+        skipped: true,
+        status: "skipped"
       });
       continue;
     }
@@ -132,24 +135,42 @@ function importSourceCaptures(
 
     try {
       const parsedCapture = connector.parseCapture(capture, snapshot);
+      let transactionOpen = false;
 
-      const captureRecordIdsByLine = insertCaptureRecords(db, captureId, parsedCapture.rawRecords);
-      const sessionId = upsertSession(db, sourceId, parsedCapture.session, parsedCapture.messages.length);
+      try {
+        db.exec("BEGIN");
+        transactionOpen = true;
 
-      replaceSessionMessages(
-        db,
-        sessionId,
-        parsedCapture.messages.map((message) => ({
-          ...message,
-          metadata: {
-            ...message.metadata,
-            textHash: getTextSha1(message.text)
+        const captureRecordIdsByLine = insertCaptureRecords(db, captureId, parsedCapture.rawRecords);
+        const sessionId = upsertSession(db, sourceId, parsedCapture.session, parsedCapture.messages.length);
+
+        replaceSessionMessages(
+          db,
+          sessionId,
+          parsedCapture.messages.map((message) => ({
+            ...message,
+            metadata: {
+              ...message.metadata,
+              textHash: getTextSha1(message.text)
+            }
+          })),
+          captureRecordIdsByLine
+        );
+        replaceSessionArtifacts(db, sessionId, parsedCapture.artifacts, captureRecordIdsByLine);
+        updateCaptureStatus(db, captureId, "normalized");
+        db.exec("COMMIT");
+        transactionOpen = false;
+      } catch (error) {
+        if (transactionOpen) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // Preserve the original normalization error below.
           }
-        })),
-        captureRecordIdsByLine
-      );
-      replaceSessionArtifacts(db, sessionId, parsedCapture.artifacts, captureRecordIdsByLine);
-      updateCaptureStatus(db, captureId, "normalized");
+        }
+
+        throw error;
+      }
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
       updateCaptureFailure(db, captureId, errorText);
@@ -157,7 +178,9 @@ function importSourceCaptures(
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
         rawSha256: snapshot.rawSha256,
-        skipped: false
+        skipped: false,
+        status: "failed",
+        errorText
       });
       continue;
     }
@@ -167,7 +190,8 @@ function importSourceCaptures(
       sourcePath: capture.sourcePath,
       externalSessionId: capture.externalSessionId,
       rawSha256: snapshot.rawSha256,
-      skipped: false
+      skipped: false,
+      status: "imported"
     });
   }
 

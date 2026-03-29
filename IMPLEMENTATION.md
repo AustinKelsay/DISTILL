@@ -181,15 +181,23 @@ Each connector should implement the same contract:
 ```ts
 interface SourceConnector {
   kind: "codex" | "claude_code" | "opencode";
-  detect(): Promise<DiscoveredSource>;
-  discoverCaptures(): Promise<DiscoveredCapture[]>;
-  snapshotCapture(capture: DiscoveredCapture): Promise<{
+  detect(): DiscoveredSource;
+  discoverCaptures(): DiscoveredCapture[];
+  snapshotCapture(capture: DiscoveredCapture): {
     rawText: string;
     rawSha256: string;
     sourceModifiedAt?: string;
     sourceSizeBytes?: number;
-  }>;
-  parseCapture(capture: DiscoveredCapture): Promise<ParsedCapture>;
+  };
+  parseCapture(
+    capture: DiscoveredCapture,
+    snapshot: {
+      rawText: string;
+      rawSha256: string;
+      sourceModifiedAt?: string;
+      sourceSizeBytes?: number;
+    }
+  ): ParsedCapture;
 }
 ```
 
@@ -204,7 +212,7 @@ Connectors should not:
 
 They only discover and normalize.
 
-In the current codebase this contract is implemented as plain functions rather than a formal shared interface type, but the responsibility split is the same:
+In the current codebase this contract is defined as a shared type in `src/connectors/types.ts`, and the responsibility split is the same:
 
 - `detect*Source()`
 - `discover*Captures()`

@@ -1,5 +1,5 @@
 import { countFiles, findExecutable, pathExists } from "../../distill/fs";
-import { getOpenCodeConfigDir } from "../../distill/paths";
+import { getOpenCodeConfigDir, getOpenCodeStateDir } from "../../distill/paths";
 import { DiscoveredSource, SourcePathCheck } from "../../shared/types";
 import {
   getOpenCodeDatabasePath,
@@ -12,6 +12,7 @@ export function detectOpenCodeSource(): DiscoveredSource {
   const databasePath = getOpenCodeDatabasePath(executablePath);
   const dataRoot = getOpenCodeDatabaseRoot(executablePath);
   const configDir = getOpenCodeConfigDir();
+  const stateDir = getOpenCodeStateDir();
   const promptHistoryPath = getOpenCodePromptHistoryPath();
 
   const checks: SourcePathCheck[] = [
@@ -52,7 +53,7 @@ export function detectOpenCodeSource(): DiscoveredSource {
     metadata: {
       databasePath,
       configDir,
-      stateDir: getOpenCodePromptHistoryPath().replace(/\/prompt-history\.jsonl$/, ""),
+      stateDir,
       discoveryStrategy: "opencode db --format json",
       exportStrategy: "opencode export <sessionId>"
     }

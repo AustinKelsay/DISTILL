@@ -104,33 +104,51 @@ function writeFakeOpenCodeExecutable(
   }
 
   const scriptPath = path.join(binDir, "opencode");
+  const cmdPath = path.join(binDir, "opencode.cmd");
   fs.writeFileSync(
     scriptPath,
-    `#!/bin/sh
-if [ "$1" = "db" ] && [ "$2" = "path" ]; then
-  printf '%s\\n' "$TEST_OPENCODE_DB_PATH"
-  exit 0
-fi
-if [ "$1" = "db" ]; then
-  cat "$TEST_OPENCODE_DB_QUERY_JSON"
-  exit 0
-fi
-if [ "$1" = "export" ]; then
-  session="$2"
-  file="$TEST_OPENCODE_EXPORT_DIR/$session.json"
-  if [ ! -f "$file" ]; then
-    echo "missing export for $session" >&2
-    exit 1
-  fi
-  printf 'Exporting session: %s\\n' "$session"
-  cat "$file"
-  exit 0
-fi
-echo "unsupported fake opencode command" >&2
-exit 1
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+
+if (args[0] === "db" && args[1] === "path") {
+  process.stdout.write(\`\${process.env.TEST_OPENCODE_DB_PATH ?? ""}\\n\`);
+  process.exit(0);
+}
+
+if (args[0] === "db") {
+  process.stdout.write(fs.readFileSync(process.env.TEST_OPENCODE_DB_QUERY_JSON, "utf8"));
+  process.exit(0);
+}
+
+if (args[0] === "export") {
+  const session = args[1];
+  const file = path.join(process.env.TEST_OPENCODE_EXPORT_DIR, \`\${session}.json\`);
+  if (!fs.existsSync(file)) {
+    process.stderr.write(\`missing export for \${session}\\n\`);
+    process.exit(1);
+  }
+
+  process.stdout.write(\`Exporting session: \${session}\\n\`);
+  process.stdout.write(fs.readFileSync(file, "utf8"));
+  process.exit(0);
+}
+
+process.stderr.write("unsupported fake opencode command\\n");
+process.exit(1);
 `
   );
-  fs.chmodSync(scriptPath, 0o755);
+  fs.writeFileSync(
+    cmdPath,
+    `@echo off
+"${process.execPath.replace(/"/g, "\"\"")}" "%~dp0opencode" %*
+`
+  );
+  if (process.platform !== "win32") {
+    fs.chmodSync(scriptPath, 0o755);
+  }
 
   process.env.TEST_OPENCODE_DB_PATH = opencodeDbPath;
   process.env.TEST_OPENCODE_DB_QUERY_JSON = dbQueryPath;
@@ -329,6 +347,88 @@ test("runImport imports OpenCode sessions through the fake CLI and keeps failure
     assert.equal(session.cli_version, "1.3.3");
     assert.equal(failedCapture.status, "failed");
     assert.match(failedCapture.error_text ?? "", /missing export/i);
+    assert.equal(report.captures.find((capture) => capture.externalSessionId === "ses_ok")?.status, "imported");
+    assert.equal(report.captures.find((capture) => capture.externalSessionId === "ses_fail")?.status, "failed");
+    assert.match(report.captures.find((capture) => capture.externalSessionId === "ses_fail")?.errorText ?? "", /missing export/i);
+
+    db.close();
+  });
+});
+
+test("runImport rolls back partial normalization writes when session replacement fails", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+    writeFakeOpenCodeExecutable(
+      root,
+      [
+        {
+          id: "ses_tx_fail",
+          title: "Duplicate parts",
+          directory: "/tmp/opencode-demo",
+          version: "1.3.3",
+          time_created: 1774543194067,
+          time_updated: 1774543475213,
+          time_archived: null,
+          share_url: null
+        }
+      ],
+      {
+        ses_tx_fail: JSON.stringify({
+          info: {
+            id: "ses_tx_fail",
+            directory: "/tmp/opencode-demo",
+            title: "Duplicate parts",
+            version: "1.3.3",
+            time: { created: 1774543194067, updated: 1774543475213 }
+          },
+          messages: [
+            {
+              info: {
+                id: "msg_user",
+                role: "user",
+                time: { created: 1774543194080 },
+                model: { providerID: "ollama", modelID: "draft-model" }
+              },
+              parts: [{ id: "part_user_text", type: "text", text: "Trigger a transaction failure" }]
+            },
+            {
+              info: {
+                id: "msg_assistant",
+                role: "assistant",
+                parentID: "msg_user",
+                time: { created: 1774543194090 },
+                providerID: "openai",
+                modelID: "final-model"
+              },
+              parts: [
+                { id: "duplicate_part", type: "text", text: "first assistant response" },
+                { id: "duplicate_part", type: "text", text: "second assistant response" }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const failedCapture = db
+      .prepare("SELECT id, status, error_text FROM captures WHERE external_session_id = 'ses_tx_fail'")
+      .get() as { id: number; status: string; error_text: string | null };
+    const captureRecordCount = db
+      .prepare("SELECT COUNT(*) AS count FROM capture_records WHERE capture_id = ?")
+      .get(failedCapture.id) as { count: number };
+    const sessionCount = db
+      .prepare("SELECT COUNT(*) AS count FROM sessions WHERE external_session_id = 'ses_tx_fail'")
+      .get() as { count: number };
+    const failedReport = report.captures.find((capture) => capture.externalSessionId === "ses_tx_fail");
+
+    assert.equal(failedCapture.status, "failed");
+    assert.match(failedCapture.error_text ?? "", /unique|constraint/i);
+    assert.equal(captureRecordCount.count, 0);
+    assert.equal(sessionCount.count, 0);
+    assert.equal(failedReport?.status, "failed");
+    assert.match(failedReport?.errorText ?? "", /unique|constraint/i);
 
     db.close();
   });

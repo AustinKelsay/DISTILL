@@ -145,12 +145,12 @@ function payloadText(payload: Record<string, unknown>): string | undefined {
     return payload.text.trim();
   }
 
-  if (typeof payload.output === "string" && payload.output.trim()) {
-    return payload.output.trim();
-  }
-
   if (typeof payload.error === "string" && payload.error.trim()) {
     return payload.error.trim();
+  }
+
+  if (typeof payload.output === "string" && payload.output.trim()) {
+    return payload.output.trim();
   }
 
   if (!Array.isArray(content)) {

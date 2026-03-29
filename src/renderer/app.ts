@@ -36,6 +36,7 @@ let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 let syncStatusUnsubscribe: (() => void) | null = null;
 let isSettingsOpen = false;
+let tooltipPositionsBound = false;
 
 /* Helpers */
 
@@ -454,19 +455,32 @@ function bindHelpTips(): void {
 }
 
 function bindTooltipPositions(): void {
-  for (const el of document.querySelectorAll<HTMLElement>("[data-tooltip]")) {
-    const updatePlacement = () => {
-      const rect = el.getBoundingClientRect();
-      if (rect.top < 72) {
-        el.setAttribute("data-tooltip-below", "true");
-      } else {
-        el.removeAttribute("data-tooltip-below");
-      }
-    };
-
-    el.onmouseenter = updatePlacement;
-    el.onfocus = updatePlacement;
+  if (tooltipPositionsBound) {
+    return;
   }
+
+  const updatePlacement = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const el = target.closest<HTMLElement>("[data-tooltip]");
+    if (!el) {
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    if (rect.top < 72) {
+      el.setAttribute("data-tooltip-below", "true");
+    } else {
+      el.removeAttribute("data-tooltip-below");
+    }
+  };
+
+  document.addEventListener("mouseenter", updatePlacement, true);
+  document.addEventListener("focusin", updatePlacement);
+  tooltipPositionsBound = true;
 }
 
 function bindSettingsPanel(): void {

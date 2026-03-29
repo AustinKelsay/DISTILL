@@ -38,6 +38,20 @@ function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function readModelInfo(model: unknown, provider: unknown): { model?: string; provider?: string } | undefined {
+  const normalizedModel = textValue(model);
+  const normalizedProvider = textValue(provider);
+
+  if (!normalizedModel && !normalizedProvider) {
+    return undefined;
+  }
+
+  return {
+    model: normalizedModel,
+    provider: normalizedProvider
+  };
+}
+
 function firstUserText(messages: OpenCodeExportMessage[]): string | undefined {
   for (const message of messages) {
     if (message.info?.role !== "user") {
@@ -184,17 +198,14 @@ function normalizeModelInfo(messages: OpenCodeExportMessage[]): { model?: string
 
     if (info.role === "user" && !firstUserModel) {
       const modelInfo = info.model && typeof info.model === "object" ? (info.model as Record<string, unknown>) : {};
-      firstUserModel = {
-        model: textValue(modelInfo.modelID),
-        provider: textValue(modelInfo.providerID)
-      };
+      firstUserModel = readModelInfo(modelInfo.modelID, modelInfo.providerID);
     }
 
     if (info.role === "assistant") {
-      lastAssistantModel = {
-        model: textValue(info.modelID),
-        provider: textValue(info.providerID)
-      };
+      const assistantModel = readModelInfo(info.modelID, info.providerID);
+      if (assistantModel) {
+        lastAssistantModel = assistantModel;
+      }
     }
   }
 

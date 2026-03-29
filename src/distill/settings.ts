@@ -1,3 +1,4 @@
+import { sourceConnectors } from "../connectors";
 import { getOpenCodeDatabasePath } from "../connectors/opencode/common";
 import { getDefaultLabelNames } from "./curation";
 import {
@@ -11,6 +12,7 @@ import {
 import { AppSettingsSnapshot } from "../shared/types";
 
 export const BACKGROUND_SYNC_INTERVAL_MINUTES = 2;
+const sourceKinds = sourceConnectors.map((connector) => connector.kind);
 
 export function getAppSettingsSnapshot(): AppSettingsSnapshot {
   return {
@@ -21,7 +23,7 @@ export function getAppSettingsSnapshot(): AppSettingsSnapshot {
     opencodeDatabasePath: getOpenCodeDatabasePath(),
     opencodeConfigDir: getOpenCodeConfigDir(),
     opencodeStateDir: getOpenCodeStateDir(),
-    sourceKinds: ["codex", "claude_code", "opencode"],
+    sourceKinds,
     defaultLabels: getDefaultLabelNames(),
     backgroundSyncIntervalMinutes: BACKGROUND_SYNC_INTERVAL_MINUTES,
     envOverrides: {

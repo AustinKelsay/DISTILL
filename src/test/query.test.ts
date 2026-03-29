@@ -253,6 +253,43 @@ test("query layer returns artifact summaries for session detail", () => {
   });
 });
 
+test("query layer prefers tool_result errors over partial output previews", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (3, 'opencode', 'OpenCode', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (41, 3, 'session-tool-error', 'Tool error session', '/tmp/demo', '2026-03-25T15:10:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO artifacts (
+        session_id, kind, metadata_json, created_at
+      ) VALUES
+      (41, 'tool_result', ?, '2026-03-25T15:10:01Z')
+    `).run(JSON.stringify({
+      name: "Read",
+      output: "partial stdout",
+      error: "permission denied"
+    }));
+
+    const detail = getSessionDetail(41);
+
+    assert.equal(detail?.artifacts[0]?.summary, "Tool result: permission denied");
+    assert.equal(detail?.artifacts[0]?.payloadPreview, "permission denied");
+
+    distillDb.close();
+  });
+});
+
 test("escapeHtml encodes transcript text before renderer interpolation", () => {
   assert.equal(
     escapeHtml(`<script>alert("x")</script> & 'quoted'`),
