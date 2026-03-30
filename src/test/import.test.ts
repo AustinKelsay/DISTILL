@@ -331,6 +331,65 @@ test("runImport imports Codex sessions from the live sessions directory", () => 
   });
 });
 
+test("runImport prefers live Codex sessions over archived duplicates", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const externalSessionId = "live1234-1111-2222-3333-abcdefabcdef";
+    const archivedCodexPath = path.join(root, ".codex", "archived_sessions");
+    const liveCodexPath = path.join(root, ".codex", "sessions", "2026", "03", "30");
+    ensureDirectory(liveCodexPath);
+
+    fs.writeFileSync(
+      path.join(archivedCodexPath, `rollout-2026-03-29T07-00-00-${externalSessionId}.jsonl`),
+      [
+        JSON.stringify({
+          timestamp: "2026-03-29T07:00:00.000Z",
+          type: "session_meta",
+          payload: { id: externalSessionId, cwd: "/tmp/archived-demo" }
+        }),
+        JSON.stringify({
+          timestamp: "2026-03-29T07:01:00.000Z",
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "stale archived codex session" }] }
+        })
+      ].join("\n")
+    );
+
+    fs.writeFileSync(
+      path.join(liveCodexPath, `rollout-2026-03-30T08-09-36-${externalSessionId}.jsonl`),
+      [
+        JSON.stringify({
+          timestamp: "2026-03-30T08:09:36.000Z",
+          type: "session_meta",
+          payload: { id: externalSessionId, cwd: "/tmp/live-demo" }
+        }),
+        JSON.stringify({
+          timestamp: "2026-03-30T08:10:00.000Z",
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "recent live codex session" }] }
+        })
+      ].join("\n")
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+
+    const sessions = db
+      .prepare("SELECT title, project_path, updated_at FROM sessions WHERE external_session_id = ?")
+      .all(externalSessionId) as Array<{ title: string | null; project_path: string | null; updated_at: string | null }>;
+    const codexSummary = report.sourceSummaries.find((summary) => summary.kind === "codex");
+
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.title, "recent live codex session");
+    assert.equal(sessions[0]?.project_path, "/tmp/live-demo");
+    assert.equal(sessions[0]?.updated_at, "2026-03-30T08:10:00.000Z");
+    assert.equal(codexSummary?.importedCaptures, 2);
+
+    db.close();
+  });
+});
+
 test("runImport imports OpenCode sessions through the fake CLI and keeps failures isolated", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);

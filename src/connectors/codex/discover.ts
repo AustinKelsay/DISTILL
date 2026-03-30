@@ -5,8 +5,9 @@ import { getCodexHome } from "../../distill/paths";
 import { DiscoveredCapture } from "../../shared/types";
 
 function extractSessionId(filePath: string): string | undefined {
-  const match = path.basename(filePath).match(/([0-9a-f]{8,}-[0-9a-f-]+)\.jsonl$/i);
-  return match?.[1];
+  const baseName = path.basename(filePath, ".jsonl");
+  const match = baseName.match(/^rollout-\d{4}-\d{2}-\d{2}(?:T\d{2}-\d{2}-\d{2})?-(.+)$/);
+  return match?.[1] ?? (baseName || undefined);
 }
 
 export function discoverCodexCaptures(): DiscoveredCapture[] {
@@ -14,7 +15,7 @@ export function discoverCodexCaptures(): DiscoveredCapture[] {
   const archivedSessionsPath = path.join(codexHome, "archived_sessions");
   const sessionsPath = path.join(codexHome, "sessions");
 
-  return [...listFilesRecursive(archivedSessionsPath), ...listFilesRecursive(sessionsPath)]
+  const archivedCaptures = listFilesRecursive(archivedSessionsPath)
     .filter((filePath) => filePath.endsWith(".jsonl"))
     .map((filePath) => {
       const stat = fs.statSync(filePath);
@@ -27,6 +28,36 @@ export function discoverCodexCaptures(): DiscoveredCapture[] {
         sourceModifiedAt: stat.mtime.toISOString(),
         sourceSizeBytes: stat.size,
         metadata: {}
-      };
+      } satisfies DiscoveredCapture;
     });
+  const liveCaptures = listFilesRecursive(sessionsPath)
+    .filter((filePath) => filePath.endsWith(".jsonl"))
+    .map((filePath) => {
+      const stat = fs.statSync(filePath);
+
+      return {
+        sourceKind: "codex",
+        captureKind: "archived_session",
+        sourcePath: filePath,
+        externalSessionId: extractSessionId(filePath),
+        sourceModifiedAt: stat.mtime.toISOString(),
+        sourceSizeBytes: stat.size,
+        metadata: {}
+      } satisfies DiscoveredCapture;
+    });
+
+  const capturesBySessionId = new Map<string, DiscoveredCapture>();
+  const capturesWithoutSessionId: DiscoveredCapture[] = [];
+
+  for (const capture of [...archivedCaptures, ...liveCaptures]) {
+    if (!capture.externalSessionId) {
+      capturesWithoutSessionId.push(capture);
+      continue;
+    }
+
+    capturesBySessionId.set(capture.externalSessionId, capture);
+  }
+
+  return [...capturesBySessionId.values(), ...capturesWithoutSessionId]
+    .sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 }
