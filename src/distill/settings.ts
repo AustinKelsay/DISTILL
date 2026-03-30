@@ -9,6 +9,7 @@ import {
   getOpenCodeConfigDir,
   getOpenCodeStateDir
 } from "./paths";
+import { getSourceColors } from "./preferences";
 import { AppSettingsSnapshot } from "../shared/types";
 
 export const BACKGROUND_SYNC_INTERVAL_MINUTES = 2;
@@ -31,6 +32,7 @@ export function getAppSettingsSnapshot(): AppSettingsSnapshot {
       codexHome: Boolean(process.env.CODEX_HOME),
       claudeHome: Boolean(process.env.CLAUDE_HOME),
       opencodeConfigDir: Boolean(process.env.OPENCODE_CONFIG_DIR)
-    }
+    },
+    sourceColors: getSourceColors()
   };
 }

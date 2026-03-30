@@ -118,13 +118,23 @@ export type ImportReport = {
   importedAt: string;
   databasePath: string;
   distillHome: string;
-  sourceSummaries: Array<{
-    kind: SourceKind;
-    discoveredCaptures: number;
-    importedCaptures: number;
-    skippedCaptures: number;
-  }>;
+  sourceSummaries: ImportSourceSummary[];
+  failedEntries: ImportFailureEntry[];
   captures: ImportedCapture[];
+};
+
+export type ImportSourceSummary = {
+  kind: SourceKind;
+  discoveredCaptures: number;
+  importedCaptures: number;
+  skippedCaptures: number;
+  failedCaptures: number;
+};
+
+export type ImportFailureEntry = {
+  sourceKind: SourceKind;
+  sourcePath: string;
+  errorText: string;
 };
 
 export type ExportReport = {
@@ -137,14 +147,65 @@ export type ExportReport = {
 export type BackgroundSyncStatus = {
   state: "idle" | "running" | "completed" | "failed";
   jobId?: number;
+  reason?: string;
   startedAt?: string;
   finishedAt?: string;
   discoveredCaptures: number;
   importedCaptures: number;
   skippedCaptures: number;
+  failedCaptures: number;
   summary: string;
   errorText?: string;
+  sourceSummaries?: ImportSourceSummary[];
+  failedEntries?: ImportFailureEntry[];
 };
+
+export type AppView = "sessions" | "logs";
+
+export type LogEntryKind = "sync" | "export";
+
+export type LogEntryStatus = "queued" | "running" | "completed" | "failed";
+
+export type LogEntryLevel = "info" | "error";
+
+export type LogEntry = {
+  id: string;
+  kind: LogEntryKind;
+  status: LogEntryStatus;
+  level: LogEntryLevel;
+  title: string;
+  summary: string;
+  createdAt: string;
+  updatedAt?: string;
+  sourceLabel?: string;
+  metrics?: {
+    discoveredCaptures?: number;
+    importedCaptures?: number;
+    skippedCaptures?: number;
+    failedCaptures?: number;
+    recordCount?: number;
+  };
+  details?: {
+    reason?: string;
+    outputPath?: string;
+    label?: string;
+    sourceSummaries?: ImportSourceSummary[];
+    failedEntries?: ImportFailureEntry[];
+  };
+  rawJson: string;
+};
+
+export type LogsPageData = {
+  entries: LogEntry[];
+  counts: {
+    total: number;
+    errors: number;
+    running: number;
+  };
+  lastSyncStatus?: BackgroundSyncStatus;
+};
+
+export type SourceColors = Record<string, string>;
 
 export type AppSettingsSnapshot = {
   distillHome: string;
@@ -163,6 +224,7 @@ export type AppSettingsSnapshot = {
     claudeHome: boolean;
     opencodeConfigDir: boolean;
   };
+  sourceColors: SourceColors;
 };
 
 export type SessionListItem = {

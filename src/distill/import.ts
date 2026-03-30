@@ -14,7 +14,13 @@ import {
   upsertSource
 } from "./db";
 import { getDistillHome } from "./paths";
-import { DiscoveredCapture, DiscoveredSource, ImportReport, ImportedCapture } from "../shared/types";
+import {
+  DiscoveredCapture,
+  DiscoveredSource,
+  ImportFailureEntry,
+  ImportReport,
+  ImportedCapture
+} from "../shared/types";
 
 const PARSER_VERSION = "v0";
 
@@ -85,10 +91,18 @@ function importSourceCaptures(
   source: DiscoveredSource,
   sourceId: number,
   captures: DiscoveredCapture[]
-): { importedCaptures: number; skippedCaptures: number; captures: ImportedCapture[] } {
+): {
+  importedCaptures: number;
+  skippedCaptures: number;
+  failedCaptures: number;
+  captures: ImportedCapture[];
+  failedEntries: ImportFailureEntry[];
+} {
   let importedCaptures = 0;
   let skippedCaptures = 0;
+  let failedCaptures = 0;
   const imported: ImportedCapture[] = [];
+  const failedEntries: ImportFailureEntry[] = [];
 
   for (const capture of captures) {
     let snapshot: CaptureSnapshot;
@@ -114,6 +128,12 @@ function importSourceCaptures(
         status: "failed",
         errorText
       });
+      failedEntries.push({
+        sourceKind: source.kind,
+        sourcePath: capture.sourcePath,
+        errorText
+      });
+      failedCaptures += 1;
       continue;
     }
 
@@ -182,6 +202,12 @@ function importSourceCaptures(
         status: "failed",
         errorText
       });
+      failedEntries.push({
+        sourceKind: source.kind,
+        sourcePath: capture.sourcePath,
+        errorText
+      });
+      failedCaptures += 1;
       continue;
     }
 
@@ -198,7 +224,9 @@ function importSourceCaptures(
   return {
     importedCaptures,
     skippedCaptures,
-    captures: imported
+    failedCaptures,
+    captures: imported,
+    failedEntries
   };
 }
 
@@ -218,6 +246,7 @@ export function runImport(): ImportReport {
     }));
 
     const sourceSummaries: ImportReport["sourceSummaries"] = [];
+    const failedEntries: ImportReport["failedEntries"] = [];
     const captures: ImportedCapture[] = [];
 
     for (const entry of sourcesWithCaptures) {
@@ -228,10 +257,12 @@ export function runImport(): ImportReport {
         kind: entry.source.kind,
         discoveredCaptures: entry.captures.length,
         importedCaptures: result.importedCaptures,
-        skippedCaptures: result.skippedCaptures
+        skippedCaptures: result.skippedCaptures,
+        failedCaptures: result.failedCaptures
       });
 
       captures.push(...result.captures);
+      failedEntries.push(...result.failedEntries);
     }
 
     return {
@@ -239,6 +270,7 @@ export function runImport(): ImportReport {
       databasePath: distillDb.databasePath,
       distillHome: getDistillHome(),
       sourceSummaries,
+      failedEntries,
       captures
     };
   } finally {

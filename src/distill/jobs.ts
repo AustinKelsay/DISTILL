@@ -1,6 +1,6 @@
 import { openDistillDatabase } from "./db";
 import { runImport } from "./import";
-import { BackgroundSyncStatus, ImportReport } from "../shared/types";
+import { BackgroundSyncStatus, ImportFailureEntry, ImportReport, ImportSourceSummary } from "../shared/types";
 
 type JobRow = {
   id: number;
@@ -16,7 +16,10 @@ type SyncPayload = {
   discoveredCaptures?: number;
   importedCaptures?: number;
   skippedCaptures?: number;
+  failedCaptures?: number;
   summary?: string;
+  sourceSummaries?: ImportSourceSummary[];
+  failedEntries?: ImportFailureEntry[];
 };
 
 function parsePayload(payloadJson: string): SyncPayload {
@@ -35,6 +38,7 @@ function toStatus(row: JobRow | undefined): BackgroundSyncStatus {
       discoveredCaptures: 0,
       importedCaptures: 0,
       skippedCaptures: 0,
+      failedCaptures: 0,
       summary: "Idle"
     };
   }
@@ -47,13 +51,17 @@ function toStatus(row: JobRow | undefined): BackgroundSyncStatus {
   return {
     state,
     jobId: row.id,
+    reason: payload.reason,
     startedAt: payload.startedAt,
     finishedAt: payload.finishedAt,
     discoveredCaptures: payload.discoveredCaptures ?? 0,
     importedCaptures: payload.importedCaptures ?? 0,
     skippedCaptures: payload.skippedCaptures ?? 0,
+    failedCaptures: payload.failedCaptures ?? 0,
     summary: payload.summary ?? (state === "running" ? "Sync running" : "Idle"),
-    errorText: row.last_error ?? undefined
+    errorText: row.last_error ?? undefined,
+    sourceSummaries: payload.sourceSummaries,
+    failedEntries: payload.failedEntries
   };
 }
 
@@ -61,6 +69,7 @@ function summarizeImport(report: ImportReport): BackgroundSyncStatus {
   const discoveredCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.discoveredCaptures, 0);
   const importedCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.importedCaptures, 0);
   const skippedCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.skippedCaptures, 0);
+  const failedCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.failedCaptures, 0);
 
   return {
     state: "completed",
@@ -69,7 +78,10 @@ function summarizeImport(report: ImportReport): BackgroundSyncStatus {
     discoveredCaptures,
     importedCaptures,
     skippedCaptures,
-    summary: `Sync complete: ${importedCaptures} imported, ${skippedCaptures} skipped across ${discoveredCaptures} captures`
+    failedCaptures,
+    summary: `Sync complete: ${importedCaptures} imported, ${skippedCaptures} skipped, ${failedCaptures} failed across ${discoveredCaptures} captures`,
+    sourceSummaries: report.sourceSummaries,
+    failedEntries: report.failedEntries
   };
 }
 
@@ -132,6 +144,7 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
   const distillDb = openDistillDatabase();
   let jobId: number | undefined;
   let startedAt = new Date().toISOString();
+  let reason: string | undefined;
 
   try {
     const row = distillDb.db.prepare(`
@@ -150,6 +163,7 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
 
     jobId = row.id;
     const payload = parsePayload(row.payload_json);
+    reason = payload.reason;
     startedAt = new Date().toISOString();
 
     distillDb.db.prepare(`
@@ -188,10 +202,14 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
         JSON.stringify({
           startedAt,
           finishedAt: status.finishedAt,
+          reason,
           discoveredCaptures: status.discoveredCaptures,
           importedCaptures: status.importedCaptures,
           skippedCaptures: status.skippedCaptures,
-          summary: status.summary
+          failedCaptures: status.failedCaptures,
+          summary: status.summary,
+          sourceSummaries: status.sourceSummaries,
+          failedEntries: status.failedEntries
         }),
         jobId
       );
@@ -221,7 +239,9 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
         JSON.stringify({
           startedAt,
           finishedAt: failedAt,
-          summary: "Sync failed"
+          reason,
+          summary: "Sync failed",
+          failedEntries: []
         }),
         jobId
       );
@@ -232,13 +252,16 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
     return {
       state: "failed",
       jobId,
+      reason,
       startedAt,
       finishedAt: failedAt,
       discoveredCaptures: 0,
       importedCaptures: 0,
       skippedCaptures: 0,
+      failedCaptures: 0,
       summary: "Sync failed",
-      errorText
+      errorText,
+      failedEntries: []
     };
   }
 }

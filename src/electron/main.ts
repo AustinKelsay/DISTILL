@@ -29,6 +29,7 @@ function createMainWindow(): void {
     }
   });
 
+  mainWindow.maximize();
   mainWindow.loadFile(path.join(app.getAppPath(), "static", "index.html"));
 }
 

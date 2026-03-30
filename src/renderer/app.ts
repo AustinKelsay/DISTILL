@@ -1,14 +1,18 @@
 import {
+  AppView,
   AppSettingsSnapshot,
   BackgroundSyncStatus,
   DashboardData,
   DoctorReport,
   DiscoveredSource,
   ExportReport,
+  LogEntry,
+  LogsPageData,
   SearchResult,
   SessionArtifact,
   SessionDetail,
-  SessionListItem
+  SessionListItem,
+  SourceColors
 } from "../shared/types";
 
 declare global {
@@ -18,11 +22,13 @@ declare global {
       getDashboardData: () => DashboardData;
       getSessionDetail: (sessionId: number) => SessionDetail | undefined;
       searchSessions: (query: string) => SearchResult[];
+      getLogsPageData: () => LogsPageData;
       addSessionTag: (sessionId: number, tagName: string) => void;
       removeSessionTag: (sessionId: number, tagId: number) => void;
       toggleSessionLabel: (sessionId: number, labelName: string) => void;
       getDefaultLabelNames: () => string[];
       exportSessionsByLabel: (label: string) => ExportReport;
+      setSourceColor: (sourceKind: string, color: string) => SourceColors;
       getAppSettings: () => AppSettingsSnapshot;
       getBackgroundSyncStatus: () => Promise<BackgroundSyncStatus>;
       requestBackgroundSync: () => Promise<BackgroundSyncStatus>;
@@ -32,11 +38,16 @@ declare global {
 }
 
 let dashboardData: DashboardData | null = null;
+let logsPageData: LogsPageData | null = null;
 let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 let syncStatusUnsubscribe: (() => void) | null = null;
 let isSettingsOpen = false;
 let tooltipPositionsBound = false;
+let activeView: AppView = "sessions";
+let logsSearchQuery = "";
+let activeLogsFilter: "all" | "sync" | "export" | "errors" = "all";
+let exportDropdownDismissBound = false;
 
 /* Helpers */
 
@@ -71,14 +82,19 @@ function showExportToast(message: string): void {
   exportTimeout = setTimeout(() => el.classList.remove("visible"), 4000);
 }
 
-function renderHelpTip(text: string, label = "?"): string {
+function renderHelpTip(text: string, title?: string, label = "?"): string {
   const safe = escapeHtml(text);
-  return `<button class="help-tip" type="button" data-help-tip="${safe}" data-tooltip="${safe}" title="${safe}" aria-label="${safe}">${escapeHtml(label)}</button>`;
+  const safeTitle = title ? ` data-help-title="${escapeHtml(title)}"` : "";
+  return `<button class="help-tip" type="button" data-help-tip="${safe}"${safeTitle} aria-label="${safe}">${escapeHtml(label)}</button>`;
 }
 
 function tooltipAttrs(text: string): string {
   const safe = escapeHtml(text);
   return `data-tooltip="${safe}" title="${safe}"`;
+}
+
+function titleAttr(text: string): string {
+  return `title="${escapeHtml(text)}"`;
 }
 
 function sourceLabel(sourceKind: SessionListItem["sourceKind"] | SearchResult["sourceKind"] | SessionDetail["sourceKind"]): string {
@@ -93,19 +109,247 @@ function sourceLabel(sourceKind: SessionListItem["sourceKind"] | SearchResult["s
   return "codex";
 }
 
+function sourceBadgeClass(sourceKind: SessionListItem["sourceKind"] | SearchResult["sourceKind"] | SessionDetail["sourceKind"]): string {
+  if (sourceKind === "claude_code") return "badge-source-claude";
+  if (sourceKind === "opencode") return "badge-source-opencode";
+  return "badge-source-codex";
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function applySourceColors(colors: SourceColors): void {
+  const root = document.documentElement;
+  root.style.setProperty("--source-codex", colors.codex ?? "#3dbf9a");
+  root.style.setProperty("--source-codex-bg", hexToRgba(colors.codex ?? "#3dbf9a", 0.14));
+  root.style.setProperty("--source-claude", colors.claude_code ?? "#d4944a");
+  root.style.setProperty("--source-claude-bg", hexToRgba(colors.claude_code ?? "#d4944a", 0.14));
+  root.style.setProperty("--source-opencode", colors.opencode ?? "#a88cd4");
+  root.style.setProperty("--source-opencode-bg", hexToRgba(colors.opencode ?? "#a88cd4", 0.14));
+}
+
 function renderSyncStatus(status: BackgroundSyncStatus): void {
   const el = document.querySelector<HTMLElement>("[data-sync-status]");
   if (!el) return;
 
-  const text =
-    status.state === "running" ? "syncing..."
+  el.textContent = syncStatusText(status);
+  el.title = status.errorText ?? status.summary;
+  el.dataset.state = status.state;
+}
+
+function syncStatusText(status: BackgroundSyncStatus | undefined): string {
+  if (!status) return "idle";
+
+  return status.state === "running" ? "syncing..."
     : status.state === "failed" ? "sync failed"
     : status.finishedAt ? `synced ${timeAgo(status.finishedAt)}`
     : "idle";
+}
 
-  el.textContent = text;
-  el.title = status.errorText ?? status.summary;
-  el.dataset.state = status.state;
+function formatDateTime(dateStr: string | undefined): string {
+  if (!dateStr) return "-";
+  return new Date(dateStr).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function logStatusBadgeClass(entry: LogEntry): string {
+  if (entry.status === "failed") return "badge-status-failed";
+  if (entry.status === "running") return "badge-status-running";
+  if (entry.status === "queued") return "badge-status-queued";
+  if (entry.level === "error") return "badge-status-failed";
+  return "badge-status-completed";
+}
+
+function renderLogMetrics(entry: LogEntry): string {
+  if (!entry.metrics) {
+    return "";
+  }
+
+  if (entry.kind === "sync") {
+    const d = entry.metrics.discoveredCaptures ?? 0;
+    const i = entry.metrics.importedCaptures ?? 0;
+    const s = entry.metrics.skippedCaptures ?? 0;
+    const f = entry.metrics.failedCaptures ?? 0;
+    return `
+      <div class="log-metrics">
+        <span ${tooltipAttrs("Captures discovered from source directories")}>${d} found</span>
+        <span ${tooltipAttrs("Captures imported into the database")}>${i} imported</span>
+        <span ${tooltipAttrs("Captures already imported, unchanged")}>${s} skipped</span>
+        <span ${tooltipAttrs("Captures that failed to parse or import")}>${f} failed</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="log-metrics">
+      <span>${entry.sourceLabel ?? "export"}</span>
+      <span>${entry.metrics.recordCount ?? 0} records</span>
+    </div>
+  `;
+}
+
+function renderLogEntry(entry: LogEntry): string {
+  const details = entry.details;
+  const sourceSummaries = details?.sourceSummaries?.length
+    ? `
+      <section class="log-detail-section">
+        <div class="log-detail-title">Source Summary</div>
+        <div class="log-source-summary-list">
+          ${details.sourceSummaries.map((summary) => `
+            <div class="log-source-summary">
+              <span class="badge ${sourceBadgeClass(summary.kind)}">${sourceLabel(summary.kind)}</span>
+              <span>${summary.discoveredCaptures} found</span>
+              <span>${summary.importedCaptures} imported</span>
+              <span>${summary.skippedCaptures} skipped</span>
+              <span>${summary.failedCaptures} failed</span>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `
+    : "";
+  const failedEntries = details?.failedEntries?.length
+    ? `
+      <section class="log-detail-section">
+        <div class="log-detail-title">Failures</div>
+        <div class="log-failure-list">
+          ${details.failedEntries.map((failure) => `
+            <div class="log-failure-item">
+              <div class="log-failure-head">
+                <span class="badge ${sourceBadgeClass(failure.sourceKind)}">${sourceLabel(failure.sourceKind)}</span>
+                <span class="log-failure-path">${escapeHtml(failure.sourcePath)}</span>
+              </div>
+              <div class="log-failure-copy">${escapeHtml(failure.errorText)}</div>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `
+    : "";
+  const detailRows = [
+    details?.reason ? `<div class="log-detail-row"><span class="log-detail-key">Reason</span><span class="log-detail-value">${escapeHtml(details.reason)}</span></div>` : "",
+    details?.label ? `<div class="log-detail-row"><span class="log-detail-key">Label</span><span class="log-detail-value">${escapeHtml(details.label)}</span></div>` : "",
+    details?.outputPath ? `<div class="log-detail-row"><span class="log-detail-key">Output</span><span class="log-detail-value">${escapeHtml(details.outputPath)}</span></div>` : ""
+  ].filter(Boolean).join("");
+
+  return `
+    <details class="log-card ${entry.level === "error" ? "is-error" : ""}">
+      <summary>
+        <div class="log-card-topline">
+          <span class="log-timestamp">${escapeHtml(formatDateTime(entry.updatedAt ?? entry.createdAt))}</span>
+          <span class="badge badge-log-kind">${escapeHtml(entry.kind)}</span>
+          <span class="badge ${logStatusBadgeClass(entry)}">${escapeHtml(entry.status)}</span>
+          ${entry.sourceLabel ? `<span class="log-source-label">${escapeHtml(entry.sourceLabel)}</span>` : ""}
+        </div>
+        <div class="log-card-title">${escapeHtml(entry.summary)}</div>
+        <div class="log-card-subtitle">
+          <span>${escapeHtml(entry.title)}</span>
+          ${renderLogMetrics(entry)}
+        </div>
+      </summary>
+      <div class="log-card-body">
+        ${detailRows ? `<section class="log-detail-section">${detailRows}</section>` : ""}
+        ${sourceSummaries}
+        ${failedEntries}
+        <section class="log-detail-section">
+          <div class="log-detail-title">Raw</div>
+          <pre class="log-raw">${escapeHtml(entry.rawJson)}</pre>
+        </section>
+      </div>
+    </details>
+  `;
+}
+
+function filteredLogEntries(data: LogsPageData): LogEntry[] {
+  const query = logsSearchQuery.trim().toLowerCase();
+  return data.entries.filter((entry) => {
+    if (activeLogsFilter === "sync" && entry.kind !== "sync") return false;
+    if (activeLogsFilter === "export" && entry.kind !== "export") return false;
+    if (activeLogsFilter === "errors" && entry.level !== "error") return false;
+
+    if (!query) return true;
+
+    const haystack = [
+      entry.kind,
+      entry.status,
+      entry.title,
+      entry.summary,
+      entry.sourceLabel,
+      entry.details?.reason,
+      entry.details?.label,
+      entry.details?.outputPath,
+      entry.rawJson,
+      ...(entry.details?.failedEntries ?? []).flatMap((failure) => [failure.sourceKind, failure.sourcePath, failure.errorText])
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .toLowerCase();
+
+    return haystack.includes(query);
+  });
+}
+
+function renderLogsView(data: LogsPageData): void {
+  const root = document.querySelector<HTMLElement>("[data-session-detail]");
+  if (!root) return;
+
+  const entries = filteredLogEntries(data);
+  const lastSyncLabel = syncStatusText(data.lastSyncStatus);
+  const emptyState = data.entries.length === 0
+    ? `
+      <div class="detail-empty">
+        <div class="empty-state">
+          <div class="empty-title">No logs yet</div>
+          <div class="empty-copy">Sync and export activity will show up here once Distill has operational history to surface.</div>
+        </div>
+      </div>
+    `
+    : `
+      <div class="detail-empty">
+        <div class="empty-state">
+          <div class="empty-title">No matching logs</div>
+          <div class="empty-copy">Adjust the log search or filters to widen the current result set.</div>
+        </div>
+      </div>
+    `;
+
+  root.innerHTML = `
+    <div class="logs-view">
+      <div class="logs-header">
+        <div>
+          <div class="detail-title">Logs</div>
+          <div class="logs-subtitle">Operational sync and export history that normally only shows up in the shell.</div>
+        </div>
+        <div class="logs-summary">
+          <span class="log-summary-chip">${data.counts.total} entries</span>
+          <span class="log-summary-chip ${data.counts.errors ? "is-error" : ""}">${data.counts.errors} errors</span>
+          <span class="log-summary-chip">${escapeHtml(lastSyncLabel)}</span>
+        </div>
+      </div>
+      <div class="logs-controls">
+        <input class="logs-search-input" type="search" placeholder="Search logs…" value="${escapeHtml(logsSearchQuery)}" data-logs-search />
+        <div class="logs-filter-row">
+          <button class="chip ${activeLogsFilter === "all" ? "active" : ""}" type="button" data-logs-filter="all">All</button>
+          <button class="chip ${activeLogsFilter === "sync" ? "active" : ""}" type="button" data-logs-filter="sync">Sync</button>
+          <button class="chip ${activeLogsFilter === "export" ? "active" : ""}" type="button" data-logs-filter="export">Exports</button>
+          <button class="chip ${activeLogsFilter === "errors" ? "active" : ""}" type="button" data-logs-filter="errors">Errors</button>
+        </div>
+      </div>
+      <div class="logs-list">
+        ${entries.length ? entries.map(renderLogEntry).join("") : emptyState}
+      </div>
+    </div>
+  `;
+
+  bindLogsControls();
 }
 
 /* Sources */
@@ -127,7 +371,7 @@ function renderSource(source: DiscoveredSource): string {
   return `
     <div class="source-row" ${tooltipAttrs(`Source root: ${source.dataRoot ?? "not found"}`)}>
       <span class="status-dot ${dot}"></span>
-      <span class="source-name">${escapeHtml(source.displayName)} ${renderHelpTip(`Distill checks whether ${source.displayName} is installed locally and whether its expected data directories are present.`)}</span>
+      <span class="source-name">${escapeHtml(source.displayName)}</span>
       <span class="source-path">${escapeHtml(source.dataRoot ?? "not found")}</span>
     </div>
     <div class="source-checks">${checks}</div>
@@ -139,10 +383,10 @@ function renderSource(source: DiscoveredSource): string {
 function renderSessionItem(session: SessionListItem): string {
   const metaTooltip = `${session.sourceKind} session, ${session.messageCount} messages${session.model ? `, model ${session.model}` : ""}${session.gitBranch ? `, branch ${session.gitBranch}` : ""}`;
   return `
-    <div class="session-item" data-session-id="${session.id}" ${tooltipAttrs(metaTooltip)}>
+    <div class="session-item" data-session-id="${session.id}" ${titleAttr(metaTooltip)}>
       <div class="session-item-title">${escapeHtml(session.title)}</div>
       <div class="session-item-meta">
-        <span class="badge badge-source">${sourceLabel(session.sourceKind)}</span>
+        <span class="badge ${sourceBadgeClass(session.sourceKind)}">${sourceLabel(session.sourceKind)}</span>
         ${session.model ? `<span class="badge badge-model">${escapeHtml(session.model)}</span>` : ""}
         <span>${session.messageCount} msgs</span>
         <span>${timeAgo(session.updatedAt)}</span>
@@ -155,10 +399,10 @@ function renderSessionItem(session: SessionListItem): string {
 
 function renderSearchItem(result: SearchResult): string {
   return `
-    <div class="session-item" data-session-id="${result.sessionId}" ${tooltipAttrs(`Search hit from ${result.sourceKind}. Click to open the full session transcript.`)}>
+    <div class="session-item" data-session-id="${result.sessionId}">
       <div class="session-item-title">${escapeHtml(result.title)}</div>
       <div class="session-item-meta">
-        <span class="badge badge-source">${sourceLabel(result.sourceKind)}</span>
+        <span class="badge ${sourceBadgeClass(result.sourceKind)}">${sourceLabel(result.sourceKind)}</span>
         <span>${timeAgo(result.updatedAt)}</span>
       </div>
       <div class="session-item-preview">${escapeHtml(result.snippet)}</div>
@@ -176,7 +420,7 @@ function renderArtifact(artifact: SessionArtifact): string {
   ].filter(Boolean).map((part) => `<span>${escapeHtml(String(part))}</span>`).join("");
 
   return `
-    <details class="artifact-card" ${tooltipAttrs("Expand to inspect the structured payload Distill extracted from the raw session capture.")}>
+    <details class="artifact-card">
       <summary>
         <div class="artifact-title">${escapeHtml(artifact.summary)}</div>
         <div class="artifact-meta">${metaBits}</div>
@@ -187,11 +431,28 @@ function renderArtifact(artifact: SessionArtifact): string {
   `;
 }
 
+function renderSourceColorRow(sourceKind: string, displayName: string, color: string): string {
+  return `
+    <div class="color-picker-row">
+      <span class="color-picker-label">${escapeHtml(displayName)}</span>
+      <span class="color-picker-preview" style="background:${hexToRgba(color, 0.14)};color:${escapeHtml(color)}">${escapeHtml(displayName)}</span>
+      <input type="color" class="color-picker-swatch" value="${escapeHtml(color)}" data-source-color="${escapeHtml(sourceKind)}" />
+    </div>
+  `;
+}
+
 function renderSettingsPanel(settings: AppSettingsSnapshot): string {
-  const labels = settings.defaultLabels.map((label) => `<span class="chip chip-static" ${tooltipAttrs(`Default label: ${label}`)}>${escapeHtml(label)}</span>`).join("");
+  const labels = settings.defaultLabels.map((label) => `<span class="chip chip-static">${escapeHtml(label)}</span>`).join("");
   const sources = settings.sourceKinds.map((source) =>
     `<div class="settings-row" ${tooltipAttrs(`${source} is part of the current local import pipeline.`)}><span>${escapeHtml(source)}</span><span class="settings-note">enabled</span></div>`
   ).join("");
+
+  const colors = settings.sourceColors;
+  const colorRows = [
+    renderSourceColorRow("codex", "Codex", colors.codex ?? "#3dbf9a"),
+    renderSourceColorRow("claude_code", "Claude", colors.claude_code ?? "#d4944a"),
+    renderSourceColorRow("opencode", "OpenCode", colors.opencode ?? "#a88cd4")
+  ].join("");
 
   return `
     <div class="settings-overlay ${isSettingsOpen ? "visible" : ""}" data-settings-overlay>
@@ -199,20 +460,20 @@ function renderSettingsPanel(settings: AppSettingsSnapshot): string {
         <div class="settings-header">
           <div>
             <div class="section-title">Settings</div>
-            <div class="settings-subtitle">Initial draft. Read-only for now.</div>
+            <div class="settings-subtitle">Source colors are editable. Other settings are read-only for now.</div>
           </div>
-          <button class="btn" type="button" data-settings-close ${tooltipAttrs("Close settings and return to the main transcript browser.")}>close</button>
+          <button class="btn-ghost" type="button" data-settings-close title="Close settings">\u2715</button>
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Storage ${renderHelpTip("These are the local folders and database Distill is currently using. Environment variable overrides are shown so path issues are easier to diagnose.")}</div>
-          <div class="settings-code" ${tooltipAttrs("Primary Distill working directory on this machine.")}>${escapeHtml(settings.distillHome)}</div>
+          <div class="settings-section-title">Storage</div>
+          <div class="settings-code">${escapeHtml(settings.distillHome)}</div>
           <div class="settings-row" ${tooltipAttrs("SQLite database path used for imported sessions, messages, artifacts, and curation state.")}><span>Database</span><span class="settings-note">${escapeHtml(settings.databasePath)}</span></div>
           <div class="settings-row" ${tooltipAttrs("Whether DISTILL_HOME is explicitly set in the environment instead of using the default ~/.distill path.")}><span>DISTILL_HOME override</span><span class="settings-note">${settings.envOverrides.distillHome ? "on" : "off"}</span></div>
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Sources ${renderHelpTip("Distill currently reads from local Codex CLI, Claude Code, and OpenCode histories. These paths are where it expects to find those source files and databases.")}</div>
+          <div class="settings-section-title">Sources</div>
           ${sources}
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Codex archived sessions and history files.")}><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Claude Code project session files and history.")}><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
@@ -222,13 +483,18 @@ function renderSettingsPanel(settings: AppSettingsSnapshot): string {
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Sync ${renderHelpTip("Distill imports on startup and then checks for local changes on a fixed interval while the app is open.")}</div>
+          <div class="settings-section-title">Source Colors</div>
+          ${colorRows}
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Sync</div>
           <div class="settings-row" ${tooltipAttrs("How often Distill re-checks local source files while the app is open.")}><span>Background interval</span><span class="settings-note">every ${settings.backgroundSyncIntervalMinutes} min</span></div>
           <div class="settings-row" ${tooltipAttrs("You can force a refresh at any time with the sync button in the top bar.")}><span>Manual sync</span><span class="settings-note">top bar button</span></div>
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Curation ${renderHelpTip("Labels are used for lightweight review states and export filters. They do not change the underlying transcript.")}</div>
+          <div class="settings-section-title">Curation</div>
           <div class="settings-chip-row">${labels}</div>
         </div>
       </section>
@@ -260,11 +526,11 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
   const defaultLabels = window.distillApi.getDefaultLabelNames();
   const activeLabels = new Set(detail.labels.map((label) => label.name));
   const labelChips = defaultLabels.map((name) =>
-    `<button class="chip ${activeLabels.has(name) ? "active" : ""}" data-toggle-label="${escapeHtml(name)}" ${tooltipAttrs(`${activeLabels.has(name) ? "Remove" : "Apply"} label "${name}" for export and review workflows.`)}>${escapeHtml(name)}</button>`
+    `<button class="chip ${activeLabels.has(name) ? "active" : ""}" data-toggle-label="${escapeHtml(name)}" ${titleAttr(`${activeLabels.has(name) ? "Remove" : "Apply"} label "${name}"`)}>${escapeHtml(name)}</button>`
   ).join("");
 
   const tagChips = detail.tags.map((tag) =>
-    `<button class="chip" data-remove-tag-id="${tag.id}" ${tooltipAttrs(`Remove tag "${tag.name}" from this session.`)}>#${escapeHtml(tag.name)} x</button>`
+    `<span class="tag-chip"><span>#${escapeHtml(tag.name)}</span><button class="tag-remove" data-remove-tag-id="${tag.id}" title="Remove tag ${escapeHtml(tag.name)}">\u2715</button></span>`
   ).join("");
 
   const messages = detail.messages.map((msg) => {
@@ -296,30 +562,44 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
   root.innerHTML = `
     <div class="detail-toolbar">
       <span class="detail-title">${escapeHtml(detail.title)}</span>
-      <div class="detail-meta-inline">
-        <span>${sourceLabel(detail.sourceKind)}</span>
+      <div class="dropdown" data-export-dropdown>
+        <button class="btn btn-secondary" data-export-toggle>\u2913 Export</button>
+        <div class="dropdown-menu" data-export-menu>
+          <button class="dropdown-item" data-export-label="train">Export training set</button>
+          <button class="dropdown-item" data-export-label="holdout">Export holdout set</button>
+          <button class="dropdown-item" data-export-label="favorite">Export favorites</button>
+        </div>
+      </div>
+      <div class="detail-meta-secondary">
+        <span class="badge ${sourceBadgeClass(detail.sourceKind)}">${sourceLabel(detail.sourceKind)}</span>
         ${detail.model ? `<span>${escapeHtml(detail.model)}</span>` : ""}
         <span>${detail.messageCount} msgs</span>
-        <span>${detail.artifactCount} artifacts ${renderHelpTip("Artifacts are non-message payloads such as images, tool calls, and tool results extracted from the raw capture.")}</span>
+        <span>${detail.artifactCount} artifacts ${renderHelpTip("Artifacts are tool calls, tool results, images, and files extracted from the conversation.", "Artifacts")}</span>
         ${detail.gitBranch ? `<span>\u2387 ${escapeHtml(detail.gitBranch)}</span>` : ""}
         ${detail.projectPath ? `<span>${escapeHtml(detail.projectPath)}</span>` : ""}
         <span>${timeAgo(detail.updatedAt)}</span>
       </div>
     </div>
     <div class="curation-bar">
-      ${renderHelpTip("Use labels as lightweight review states for later export or filtering.")}
-      ${labelChips}
-      <span class="sep"></span>
-      ${tagChips}
-      <form data-tag-form style="display:inline-flex;gap:4px;margin:0">
-        <input class="tag-input" type="text" name="tagName" placeholder="+ tag" ${tooltipAttrs("Add a free-form tag to this session, then press Enter.")} />
-      </form>
+      <div class="curation-group">
+        <span class="curation-group-label">Labels</span>
+        ${labelChips}
+        ${renderHelpTip("Labels (train, holdout, favorite) control which export set a session belongs to. Tags are free-form notes you can add for your own organization.", "Labels & Tags")}
+      </div>
+      <div class="curation-group">
+        <span class="curation-group-label">Tags</span>
+        ${tagChips}
+        <form data-tag-form style="display:inline-flex;gap:6px;margin:0;align-items:center">
+          <input class="tag-input" type="text" name="tagName" placeholder="Add tag..." />
+        </form>
+      </div>
     </div>
     ${artifacts}
     <div class="message-list">${messages}</div>
   `;
 
   bindDetailCuration(detail.id);
+  bindExportDropdown();
 }
 
 function refreshActiveSession(): void {
@@ -409,16 +689,39 @@ function bindSearch(report: DashboardData): void {
   };
 }
 
-function bindExportActions(): void {
-  for (const btn of document.querySelectorAll<HTMLElement>("[data-export-label]")) {
+function bindExportDropdown(): void {
+  const toggle = document.querySelector<HTMLElement>("[data-export-toggle]");
+  const menu = document.querySelector<HTMLElement>("[data-export-menu]");
+  if (!toggle || !menu) return;
+
+  toggle.onclick = (e) => {
+    e.stopPropagation();
+    menu.classList.toggle("visible");
+  };
+
+  for (const btn of menu.querySelectorAll<HTMLElement>("[data-export-label]")) {
     btn.onclick = () => {
       const label = btn.dataset.exportLabel;
       if (!label) return;
       const report = window.distillApi.exportSessionsByLabel(label);
-      showExportToast(`Exported ${report.recordCount} ${report.label} -> ${report.outputPath}`);
+      refreshLogsData(false);
+      showExportToast(`Exported ${report.recordCount} ${report.label} \u2192 ${report.outputPath}`);
+      menu.classList.remove("visible");
     };
   }
 
+  if (!exportDropdownDismissBound) {
+    document.addEventListener("click", (e) => {
+      if (!(e.target instanceof Element)) return;
+      if (!e.target.closest("[data-export-dropdown]")) {
+        document.querySelector<HTMLElement>("[data-export-menu]")?.classList.remove("visible");
+      }
+    });
+    exportDropdownDismissBound = true;
+  }
+}
+
+function bindSyncButton(): void {
   const syncBtn = document.querySelector<HTMLElement>("[data-sync-now]");
   if (syncBtn) {
     syncBtn.onclick = async () => {
@@ -444,43 +747,157 @@ function bindSourcesToggle(): void {
   };
 }
 
-function bindHelpTips(): void {
-  for (const tip of document.querySelectorAll<HTMLElement>("[data-help-tip]")) {
-    tip.onclick = () => {
-      const text = tip.dataset.helpTip;
-      if (!text) return;
-      showExportToast(text);
-    };
+function positionFloating(floatEl: HTMLElement, anchorRect: DOMRect, preferAbove = true): void {
+  const gap = 8;
+  const pad = 12;
+
+  // Reset so we can measure
+  floatEl.style.left = "0px";
+  floatEl.style.top = "0px";
+  const floatRect = floatEl.getBoundingClientRect();
+  const fw = floatRect.width;
+  const fh = floatRect.height;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // Horizontal: center on anchor, clamp to viewport
+  let left = anchorRect.left + anchorRect.width / 2 - fw / 2;
+  left = Math.max(pad, Math.min(left, vw - fw - pad));
+
+  // Vertical: prefer above, fall back to below
+  let top: number;
+  if (preferAbove && anchorRect.top - fh - gap >= pad) {
+    top = anchorRect.top - fh - gap;
+  } else if (anchorRect.bottom + fh + gap <= vh - pad) {
+    top = anchorRect.bottom + gap;
+  } else {
+    // Last resort: whichever side has more room
+    top = anchorRect.top - fh - gap >= 0
+      ? Math.max(pad, anchorRect.top - fh - gap)
+      : Math.min(vh - fh - pad, anchorRect.bottom + gap);
   }
+
+  floatEl.style.left = `${left}px`;
+  floatEl.style.top = `${top}px`;
 }
 
-function bindTooltipPositions(): void {
-  if (tooltipPositionsBound) {
-    return;
+function bindTooltips(): void {
+  if (tooltipPositionsBound) return;
+
+  const maybeFloat = document.querySelector<HTMLElement>("[data-tooltip-float]");
+  if (!maybeFloat) return;
+  const floatEl: HTMLElement = maybeFloat;
+
+  let showTimeout: ReturnType<typeof setTimeout> | null = null;
+  let activeEl: HTMLElement | null = null;
+
+  function show(el: HTMLElement): void {
+    const text = el.dataset.tooltip;
+    if (!text) return;
+    activeEl = el;
+    floatEl.textContent = text;
+    floatEl.classList.add("visible");
+    positionFloating(floatEl, el.getBoundingClientRect(), true);
   }
 
-  const updatePlacement = (event: Event) => {
+  function hide(): void {
+    if (showTimeout) { clearTimeout(showTimeout); showTimeout = null; }
+    floatEl.classList.remove("visible");
+    activeEl = null;
+  }
+
+  document.addEventListener("mouseenter", (event) => {
     const target = event.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-
+    if (!(target instanceof Element)) return;
     const el = target.closest<HTMLElement>("[data-tooltip]");
-    if (!el) {
+    if (!el) return;
+    hide();
+    showTimeout = setTimeout(() => show(el), 250);
+  }, true);
+
+  document.addEventListener("mouseleave", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const el = target.closest<HTMLElement>("[data-tooltip]");
+    if (el && el === activeEl) hide();
+  }, true);
+
+  document.addEventListener("scroll", hide, true);
+  tooltipPositionsBound = true;
+}
+
+let helpTipsBound = false;
+
+function bindHelpTips(): void {
+  if (helpTipsBound) return;
+
+  const maybePopover = document.querySelector<HTMLElement>("[data-help-popover]");
+  if (!maybePopover) return;
+  const popoverEl: HTMLElement = maybePopover;
+
+  let activeHelpTip: HTMLElement | null = null;
+
+  function dismissPopover(): void {
+    popoverEl.classList.remove("visible");
+    activeHelpTip = null;
+  }
+
+  // Event delegation: handles any [data-help-tip] click, including dynamically rendered ones
+  document.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+
+    const tip = target.closest<HTMLElement>("[data-help-tip]");
+    if (tip) {
+      e.stopPropagation();
+      const text = tip.dataset.helpTip;
+      if (!text) return;
+
+      // Toggle if clicking the same tip
+      if (activeHelpTip === tip) {
+        dismissPopover();
+        return;
+      }
+
+      activeHelpTip = tip;
+      const popoverTitle = tip.dataset.helpTitle || "Help";
+      popoverEl.innerHTML = `<div class="help-popover-title">${escapeHtml(popoverTitle)}</div><div>${escapeHtml(text)}</div>`;
+      popoverEl.classList.add("visible");
+      positionFloating(popoverEl, tip.getBoundingClientRect(), true);
       return;
     }
 
-    const rect = el.getBoundingClientRect();
-    if (rect.top < 72) {
-      el.setAttribute("data-tooltip-below", "true");
-    } else {
-      el.removeAttribute("data-tooltip-below");
-    }
-  };
+    // Click-away dismissal
+    if (!activeHelpTip) return;
+    if (popoverEl.contains(target)) return;
+    dismissPopover();
+  });
 
-  document.addEventListener("mouseenter", updatePlacement, true);
-  document.addEventListener("focusin", updatePlacement);
-  tooltipPositionsBound = true;
+  // Dismiss on scroll
+  document.addEventListener("scroll", () => {
+    if (activeHelpTip) dismissPopover();
+  }, true);
+
+  helpTipsBound = true;
+}
+
+function bindSourceColorPickers(): void {
+  for (const input of document.querySelectorAll<HTMLInputElement>("[data-source-color]")) {
+    input.oninput = () => {
+      const sourceKind = input.dataset.sourceColor;
+      if (!sourceKind) return;
+      const colors = window.distillApi.setSourceColor(sourceKind, input.value);
+      applySourceColors(colors);
+
+      // Update the inline preview badge next to this picker
+      const row = input.closest(".color-picker-row");
+      const preview = row?.querySelector<HTMLElement>(".color-picker-preview");
+      if (preview) {
+        preview.style.background = hexToRgba(input.value, 0.14);
+        preview.style.color = input.value;
+      }
+    };
+  }
 }
 
 function bindSettingsPanel(): void {
@@ -491,14 +908,14 @@ function bindSettingsPanel(): void {
   if (openBtn) {
     openBtn.onclick = () => {
       isSettingsOpen = true;
-      renderReport(window.distillApi.getDashboardData());
+      renderCurrentView();
     };
   }
 
   if (closeBtn) {
     closeBtn.onclick = () => {
       isSettingsOpen = false;
-      renderReport(window.distillApi.getDashboardData());
+      renderCurrentView();
     };
   }
 
@@ -506,15 +923,64 @@ function bindSettingsPanel(): void {
     overlay.onclick = (event) => {
       if (event.target === overlay) {
         isSettingsOpen = false;
-        renderReport(window.distillApi.getDashboardData());
+        renderCurrentView();
       }
     };
   }
+
+  bindSourceColorPickers();
 }
 
 function refreshDashboard(): void {
   dashboardData = window.distillApi.getDashboardData();
-  renderReport(dashboardData);
+  if (activeView === "sessions") {
+    renderCurrentView();
+  }
+}
+
+function refreshLogsData(shouldRender = activeView === "logs"): void {
+  logsPageData = window.distillApi.getLogsPageData();
+  if (shouldRender) {
+    renderCurrentView();
+  }
+}
+
+function bindViewSwitch(): void {
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-view-target]")) {
+    btn.onclick = () => {
+      const target = btn.dataset.viewTarget;
+      if (target !== "sessions" && target !== "logs") return;
+      if (activeView === target) return;
+      activeView = target;
+      if (activeView === "logs") {
+        refreshLogsData(false);
+      }
+      renderCurrentView();
+    };
+  }
+}
+
+function bindLogsControls(): void {
+  const input = document.querySelector<HTMLInputElement>("[data-logs-search]");
+  if (input) {
+    input.oninput = () => {
+      logsSearchQuery = input.value;
+      if (logsPageData) {
+        renderLogsView(logsPageData);
+      }
+    };
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-logs-filter]")) {
+    btn.onclick = () => {
+      const filter = btn.dataset.logsFilter;
+      if (filter !== "all" && filter !== "sync" && filter !== "export" && filter !== "errors") return;
+      activeLogsFilter = filter;
+      if (logsPageData) {
+        renderLogsView(logsPageData);
+      }
+    };
+  }
 }
 
 function bindBackgroundSync(): void {
@@ -524,25 +990,29 @@ function bindBackgroundSync(): void {
 
   syncStatusUnsubscribe = window.distillApi.onBackgroundSyncStatus((status) => {
     renderSyncStatus(status);
+    refreshLogsData(false);
 
     if (status.state === "completed") {
-      refreshDashboard();
+      dashboardData = window.distillApi.getDashboardData();
+    }
+
+    if (activeView === "logs" || status.state === "completed") {
+      renderCurrentView();
     }
   });
 }
 
 /* Main render */
 
-function renderReport(report: DashboardData): void {
+function renderSessionsView(report: DashboardData): void {
   const sources = document.querySelector<HTMLElement>("[data-sources]");
   const sessionsEl = document.querySelector<HTMLElement>("[data-sessions]");
   const statsEl = document.querySelector<HTMLElement>("[data-stats]");
   const countEl = document.querySelector<HTMLElement>("[data-session-count]");
   const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
   const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
-  const settingsRoot = document.querySelector<HTMLElement>("[data-settings-root]");
 
-  if (!sources || !sessionsEl || !settingsRoot) return;
+  if (!sources || !sessionsEl) return;
 
   const totalSessions = report.sessions.length;
   const totalMessages = report.sessions.reduce((sum, session) => sum + session.messageCount, 0);
@@ -550,9 +1020,9 @@ function renderReport(report: DashboardData): void {
 
   if (statsEl) {
     statsEl.innerHTML = `
-      <span ${tooltipAttrs("Total imported sessions currently visible in Distill.")}><span class="stat-value">${totalSessions}</span> sessions</span>
-      <span ${tooltipAttrs("Total normalized transcript messages across the current local database.")}><span class="stat-value">${totalMessages.toLocaleString()}</span> messages</span>
-      <span ${tooltipAttrs("Number of supported local sources currently detected as installed.")}><span class="stat-value">${sourceCount}</span> sources</span>
+      <span><span class="stat-value">${totalSessions}</span> sessions</span>
+      <span><span class="stat-value">${totalMessages.toLocaleString()}</span> messages</span>
+      <span><span class="stat-value">${sourceCount}</span> sources</span>
     `;
   }
 
@@ -565,15 +1035,14 @@ function renderReport(report: DashboardData): void {
   }
 
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
-  settingsRoot.innerHTML = renderSettingsPanel(window.distillApi.getAppSettings());
   const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
   const items = query ? window.distillApi.searchSessions(query) : report.sessions;
   renderSessionList(items);
   bindSearch(report);
-  bindExportActions();
+  bindSyncButton();
   bindSourcesToggle();
   bindHelpTips();
-  bindTooltipPositions();
+  bindTooltips();
   bindSettingsPanel();
 
   if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;
@@ -591,9 +1060,55 @@ function renderReport(report: DashboardData): void {
   }
 }
 
+function renderCurrentView(): void {
+  const app = document.querySelector<HTMLElement>("[data-app-shell]");
+  const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
+  const searchInput = document.querySelector<HTMLInputElement>("[data-search-input]");
+  const statsEl = document.querySelector<HTMLElement>("[data-stats]");
+  const settingsRoot = document.querySelector<HTMLElement>("[data-settings-root]");
+  const appSettings = window.distillApi.getAppSettings();
+
+  if (document.body) {
+    document.body.dataset.appView = activeView;
+  }
+
+  app?.classList.toggle("logs-mode", activeView === "logs");
+  searchInput?.classList.toggle("is-hidden", activeView === "logs");
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-view-target]")) {
+    btn.classList.toggle("active", btn.dataset.viewTarget === activeView);
+  }
+
+  if (activeView === "logs") {
+    onboarding?.classList.remove("visible");
+    if (statsEl) {
+      statsEl.innerHTML = "";
+    }
+    if (logsPageData) {
+      renderLogsView(logsPageData);
+    } else {
+      refreshLogsData(false);
+      renderLogsView(logsPageData ?? { entries: [], counts: { total: 0, errors: 0, running: 0 } });
+    }
+  } else if (dashboardData) {
+    renderSessionsView(dashboardData);
+  }
+
+  if (settingsRoot) {
+    settingsRoot.innerHTML = renderSettingsPanel(appSettings);
+  }
+  applySourceColors(appSettings.sourceColors);
+  bindSyncButton();
+  bindViewSwitch();
+  bindHelpTips();
+  bindTooltips();
+  bindSettingsPanel();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   dashboardData = window.distillApi.getDashboardData();
-  renderReport(dashboardData);
+  logsPageData = window.distillApi.getLogsPageData();
+  renderCurrentView();
   bindBackgroundSync();
   window.distillApi.getBackgroundSyncStatus().then(renderSyncStatus).catch(() => {
     renderSyncStatus({
@@ -601,6 +1116,7 @@ document.addEventListener("DOMContentLoaded", () => {
       discoveredCaptures: 0,
       importedCaptures: 0,
       skippedCaptures: 0,
+      failedCaptures: 0,
       summary: "Sync status unavailable",
       errorText: "Sync status unavailable"
     });

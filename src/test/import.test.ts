@@ -192,6 +192,7 @@ test("runImport bootstraps the database and records discovered captures", () => 
     assert.ok(messageCount.count >= 2);
     assert.equal(activityCount.count, 2);
     assert.equal(report.sourceSummaries.length, 3);
+    assert.equal(report.sourceSummaries.every((summary) => summary.failedCaptures === 0), true);
 
     db.close();
   });
@@ -210,6 +211,7 @@ test("runImport is idempotent for unchanged raw captures", () => {
     assert.equal(captureCount.count, 2);
     assert.equal(second.sourceSummaries.every((summary) => summary.importedCaptures === 0), true);
     assert.equal(second.sourceSummaries.filter((summary) => summary.kind !== "opencode").every((summary) => summary.skippedCaptures >= 1), true);
+    assert.equal(second.sourceSummaries.every((summary) => summary.failedCaptures === 0), true);
 
     db.close();
   });
@@ -356,6 +358,7 @@ test("runImport imports OpenCode sessions through the fake CLI and keeps failure
 
     assert.equal(opencodeSummary?.discoveredCaptures, 2);
     assert.equal(opencodeSummary?.importedCaptures, 1);
+    assert.equal(opencodeSummary?.failedCaptures, 1);
     assert.equal(session.title, "Ship the OpenCode connector");
     assert.equal(session.message_count, 3);
     assert.equal(session.model, "nemotron-cascade-2:30b");
@@ -437,11 +440,13 @@ test("runImport rolls back partial normalization writes when session replacement
       .prepare("SELECT COUNT(*) AS count FROM sessions WHERE external_session_id = 'ses_tx_fail'")
       .get() as { count: number };
     const failedReport = report.captures.find((capture) => capture.externalSessionId === "ses_tx_fail");
+    const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
 
     assert.equal(failedCapture.status, "failed");
     assert.match(failedCapture.error_text ?? "", /unique|constraint/i);
     assert.equal(captureRecordCount.count, 0);
     assert.equal(sessionCount.count, 0);
+    assert.equal(opencodeSummary?.failedCaptures, 1);
     assert.equal(failedReport?.status, "failed");
     assert.match(failedReport?.errorText ?? "", /unique|constraint/i);
 
