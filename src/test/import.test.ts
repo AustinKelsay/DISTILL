@@ -281,6 +281,56 @@ test("runImport reimports changed captures and refreshes normalized session cont
   });
 });
 
+test("runImport imports Codex sessions from the live sessions directory", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const liveCodexPath = path.join(
+      root,
+      ".codex",
+      "sessions",
+      "2026",
+      "03",
+      "30"
+    );
+    ensureDirectory(liveCodexPath);
+
+    fs.writeFileSync(
+      path.join(liveCodexPath, "rollout-2026-03-30T08-09-36-live1234-1111-2222-3333-abcdefabcdef.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: "2026-03-30T08:09:36.000Z",
+          type: "session_meta",
+          payload: { id: "live1234-1111-2222-3333-abcdefabcdef", cwd: "/tmp/live-demo" }
+        }),
+        JSON.stringify({
+          timestamp: "2026-03-30T08:10:00.000Z",
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "recent live codex session" }] }
+        })
+      ].join("\n")
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+
+    const session = db
+      .prepare("SELECT title, project_path, updated_at FROM sessions WHERE external_session_id = ?")
+      .get("live1234-1111-2222-3333-abcdefabcdef") as
+      | { title: string | null; project_path: string | null; updated_at: string | null }
+      | undefined;
+    const codexSummary = report.sourceSummaries.find((summary) => summary.kind === "codex");
+
+    assert.ok(session);
+    assert.equal(session?.title, "recent live codex session");
+    assert.equal(session?.project_path, "/tmp/live-demo");
+    assert.equal(session?.updated_at, "2026-03-30T08:10:00.000Z");
+    assert.equal(codexSummary?.importedCaptures, 2);
+
+    db.close();
+  });
+});
+
 test("runImport imports OpenCode sessions through the fake CLI and keeps failures isolated", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);

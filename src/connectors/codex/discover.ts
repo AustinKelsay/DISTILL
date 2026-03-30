@@ -10,9 +10,11 @@ function extractSessionId(filePath: string): string | undefined {
 }
 
 export function discoverCodexCaptures(): DiscoveredCapture[] {
-  const archivedSessionsPath = path.join(getCodexHome(), "archived_sessions");
+  const codexHome = getCodexHome();
+  const archivedSessionsPath = path.join(codexHome, "archived_sessions");
+  const sessionsPath = path.join(codexHome, "sessions");
 
-  return listFilesRecursive(archivedSessionsPath)
+  return [...listFilesRecursive(archivedSessionsPath), ...listFilesRecursive(sessionsPath)]
     .filter((filePath) => filePath.endsWith(".jsonl"))
     .map((filePath) => {
       const stat = fs.statSync(filePath);

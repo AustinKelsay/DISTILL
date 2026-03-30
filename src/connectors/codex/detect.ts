@@ -6,6 +6,7 @@ export function detectCodexSource(): DiscoveredSource {
   const executablePath = findExecutable("codex");
   const dataRoot = getCodexHome();
   const archivedSessions = `${dataRoot}/archived_sessions`;
+  const liveSessions = `${dataRoot}/sessions`;
   const sessionIndex = `${dataRoot}/session_index.jsonl`;
   const history = `${dataRoot}/history.jsonl`;
 
@@ -22,6 +23,12 @@ export function detectCodexSource(): DiscoveredSource {
       fileCount: countFilesMatching(archivedSessions, (filePath) => filePath.endsWith(".jsonl"))
     },
     {
+      label: "sessions",
+      path: liveSessions,
+      exists: pathExists(liveSessions),
+      fileCount: countFilesMatching(liveSessions, (filePath) => filePath.endsWith(".jsonl"))
+    },
+    {
       label: "session_index",
       path: sessionIndex,
       exists: pathExists(sessionIndex),
@@ -36,7 +43,7 @@ export function detectCodexSource(): DiscoveredSource {
   ];
 
   const installStatus =
-    executablePath && checks[0].exists && checks[1].exists
+    executablePath && checks[0].exists && (checks[1].exists || checks[2].exists)
       ? "installed"
       : executablePath || checks.some((check) => check.exists)
         ? "partial"
@@ -50,7 +57,8 @@ export function detectCodexSource(): DiscoveredSource {
     installStatus,
     checks,
     metadata: {
-      primaryCapturePath: archivedSessions,
+      primaryCapturePath: checks[2].exists ? liveSessions : archivedSessions,
+      capturePaths: [archivedSessions, liveSessions],
       auxiliaryFiles: [sessionIndex, history]
     }
   };
