@@ -160,7 +160,13 @@ function mapExport(row: ExportRow): LogEntry {
 }
 
 function sortTime(entry: LogEntry): number {
-  return new Date(entry.updatedAt ?? entry.createdAt).getTime();
+  const timestamp = entry.updatedAt ?? entry.createdAt;
+  if (!timestamp) {
+    return 0;
+  }
+
+  const time = new Date(timestamp).getTime();
+  return Number.isFinite(time) ? time : 0;
 }
 
 export function getLogsPageData(limit = 200): LogsPageData {

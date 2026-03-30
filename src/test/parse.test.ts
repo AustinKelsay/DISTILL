@@ -8,6 +8,7 @@ import { parseClaudeCodeCapture } from "../connectors/claude_code/parse";
 import { snapshotClaudeCodeCapture } from "../connectors/claude_code/snapshot";
 import { parseCodexCapture } from "../connectors/codex/parse";
 import { snapshotCodexCapture } from "../connectors/codex/snapshot";
+import { openCodeTimestampToIso } from "../connectors/opencode/common";
 import { parseOpenCodeCapture } from "../connectors/opencode/parse";
 import { DiscoveredCapture } from "../shared/types";
 
@@ -450,4 +451,45 @@ test("parseOpenCodeCapture keeps the last populated assistant model when later m
 
   assert.equal(parsed.session.model, "final-model");
   assert.equal(parsed.session.modelProvider, "openai");
+});
+
+test("parseOpenCodeCapture preserves system roles from OpenCode exports", () => {
+  const capture: DiscoveredCapture = {
+    sourceKind: "opencode",
+    captureKind: "session_export",
+    sourcePath: "opencode://session/ses_system",
+    externalSessionId: "ses_system",
+    metadata: {}
+  };
+
+  const parsed = parseOpenCodeCapture(capture, {
+    rawText: JSON.stringify({
+      info: {
+        id: "ses_system",
+        title: "System role retention"
+      },
+      messages: [
+        {
+          info: {
+            id: "msg_system",
+            role: "system",
+            time: { created: 1774543194000 }
+          },
+          parts: [{ id: "part_system", type: "text", text: "You are a focused coding assistant." }]
+        }
+      ]
+    }),
+    rawSha256: "sha-system",
+    sourceModifiedAt: "2026-03-26T19:24:35.213Z",
+    sourceSizeBytes: 64
+  });
+
+  assert.equal(parsed.messages.length, 1);
+  assert.equal(parsed.messages[0]?.role, "system");
+  assert.equal(parsed.messages[0]?.text, "You are a focused coding assistant.");
+});
+
+test("openCodeTimestampToIso returns undefined for out-of-range timestamps", () => {
+  assert.equal(openCodeTimestampToIso(Number.MAX_VALUE), undefined);
+  assert.equal(openCodeTimestampToIso(String(Number.MAX_VALUE)), undefined);
 });

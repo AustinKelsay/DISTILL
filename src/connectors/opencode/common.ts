@@ -216,13 +216,20 @@ export function listOpenCodeSessions(executablePath = getOpenCodeExecutablePath(
 
 export function openCodeTimestampToIso(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return new Date(value).toISOString();
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime())) {
+      return date.toISOString();
+    }
+    return undefined;
   }
 
   if (typeof value === "string" && value.trim()) {
     const numeric = Number(value);
     if (Number.isFinite(numeric)) {
-      return new Date(numeric).toISOString();
+      const date = new Date(numeric);
+      if (Number.isFinite(date.getTime())) {
+        return date.toISOString();
+      }
     }
   }
 

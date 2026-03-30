@@ -50,7 +50,7 @@ export function detectCodexSource(): DiscoveredSource {
   const hasDataRoot = dataRootCheck.exists;
   const hasArchivedSessions = archivedSessionsCheck.exists;
   const hasLiveSessions = liveSessionsCheck.exists;
-  const hasLiveCaptures = (liveSessionsCheck.fileCount ?? 0) > 0;
+  const primaryCapturePath = hasLiveSessions ? liveSessions : archivedSessions;
 
   const installStatus =
     executablePath && hasDataRoot && (hasArchivedSessions || hasLiveSessions)
@@ -67,8 +67,8 @@ export function detectCodexSource(): DiscoveredSource {
     installStatus,
     checks,
     metadata: {
-      primaryCapturePath: hasLiveCaptures ? liveSessions : archivedSessions,
-      capturePaths: [archivedSessions, liveSessions],
+      primaryCapturePath,
+      capturePaths: Array.from(new Set([primaryCapturePath, archivedSessions, liveSessions])),
       auxiliaryFiles: [sessionIndex, history]
     }
   };

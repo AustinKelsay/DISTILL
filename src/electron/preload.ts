@@ -6,7 +6,17 @@ import { getLogsPageData } from "../distill/logs";
 import { setSourceColor } from "../distill/preferences";
 import { getDashboardData, getSessionDetail, searchSessions } from "../distill/query";
 import { getAppSettingsSnapshot } from "../distill/settings";
-import { AppSettingsSnapshot, BackgroundSyncStatus, LogsPageData, SourceColors } from "../shared/types";
+import {
+  AppSettingsSnapshot,
+  BackgroundSyncStatus,
+  DbBrowseRequest,
+  DbBrowseResult,
+  DbExplorerSnapshot,
+  DbQueryRequest,
+  DbQueryResult,
+  LogsPageData,
+  SourceColors
+} from "../shared/types";
 
 contextBridge.exposeInMainWorld("distillApi", {
   getDoctorReport: () => buildDoctorReport(),
@@ -21,6 +31,12 @@ contextBridge.exposeInMainWorld("distillApi", {
   exportSessionsByLabel: (label: string) => exportSessionsByLabel(label),
   setSourceColor: (sourceKind: string, color: string) => setSourceColor(sourceKind, color) as SourceColors,
   getAppSettings: () => getAppSettingsSnapshot() as AppSettingsSnapshot,
+  getDbExplorerSnapshot: () =>
+    ipcRenderer.invoke("distill:get-db-explorer-snapshot") as Promise<DbExplorerSnapshot>,
+  browseDbTable: (request: DbBrowseRequest) =>
+    ipcRenderer.invoke("distill:browse-db-table", request) as Promise<DbBrowseResult>,
+  runDbQuery: (request: DbQueryRequest) =>
+    ipcRenderer.invoke("distill:run-db-query", request) as Promise<DbQueryResult>,
   getBackgroundSyncStatus: () =>
     ipcRenderer.invoke("distill:get-background-sync-status") as Promise<BackgroundSyncStatus>,
   requestBackgroundSync: () =>

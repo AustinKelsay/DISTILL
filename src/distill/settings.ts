@@ -31,7 +31,9 @@ export function getAppSettingsSnapshot(): AppSettingsSnapshot {
       distillHome: Boolean(process.env.DISTILL_HOME),
       codexHome: Boolean(process.env.CODEX_HOME),
       claudeHome: Boolean(process.env.CLAUDE_HOME),
-      opencodeConfigDir: Boolean(process.env.OPENCODE_CONFIG_DIR)
+      opencodeDbPath: Boolean(process.env.OPENCODE_DB_PATH),
+      opencodeConfigDir: Boolean(process.env.OPENCODE_CONFIG_DIR),
+      opencodeStateDir: Boolean(process.env.OPENCODE_STATE_DIR)
     },
     sourceColors: getSourceColors()
   };

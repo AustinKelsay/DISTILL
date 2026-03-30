@@ -3,6 +3,19 @@ import {
   AppSettingsSnapshot,
   BackgroundSyncStatus,
   DashboardData,
+  DbBrowseRequest,
+  DbBrowseResult,
+  DbColumnInfo,
+  DbExplorerSnapshot,
+  DbFilter,
+  DbFilterOperator,
+  DbQueryRequest,
+  DbQueryResult,
+  DbRowCount,
+  DbResultColumn,
+  DbResultRow,
+  DbSort,
+  DbTableSummary,
   DoctorReport,
   DiscoveredSource,
   ExportReport,
@@ -30,6 +43,9 @@ declare global {
       exportSessionsByLabel: (label: string) => ExportReport;
       setSourceColor: (sourceKind: string, color: string) => SourceColors;
       getAppSettings: () => AppSettingsSnapshot;
+      getDbExplorerSnapshot: () => Promise<DbExplorerSnapshot>;
+      browseDbTable: (request: DbBrowseRequest) => Promise<DbBrowseResult>;
+      runDbQuery: (request: DbQueryRequest) => Promise<DbQueryResult>;
       getBackgroundSyncStatus: () => Promise<BackgroundSyncStatus>;
       requestBackgroundSync: () => Promise<BackgroundSyncStatus>;
       onBackgroundSyncStatus: (listener: (status: BackgroundSyncStatus) => void) => () => void;
@@ -43,11 +59,54 @@ let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 let syncStatusUnsubscribe: (() => void) | null = null;
 let isSettingsOpen = false;
-let tooltipPositionsBound = false;
+let floatingOverlaysBound = false;
 let activeView: AppView = "sessions";
 let logsSearchQuery = "";
 let activeLogsFilter: "all" | "sync" | "export" | "errors" = "all";
 let exportDropdownDismissBound = false;
+let dbExplorerSnapshot: DbExplorerSnapshot | null = null;
+let dbExplorerError: string | null = null;
+let dbExplorerLoading = false;
+let dbShowInternalTables = false;
+let dbSelectedTableName: string | null = null;
+let dbActiveTab: "browse" | "query" = "browse";
+let dbBrowseResult: DbBrowseResult | null = null;
+let dbBrowseError: string | null = null;
+let dbBrowseLoading = false;
+let dbBrowseFilters: DbFilter[] = [];
+let dbBrowseSort: DbSort | undefined;
+let dbBrowsePage = 1;
+let dbBrowsePageSize = 50;
+let dbQueryText = "";
+let dbQueryResult: DbQueryResult | null = null;
+let dbQueryError: string | null = null;
+let dbQueryRunning = false;
+let dbQueryIsStale = false;
+let dbSelectedRowKey: string | null = null;
+let dbSnapshotRequestToken = 0;
+let dbBrowseRequestToken = 0;
+let dbQueryRequestToken = 0;
+let tooltipShowTimeout: ReturnType<typeof setTimeout> | null = null;
+let activeTooltipAnchor: HTMLElement | null = null;
+let activeHelpTipAnchor: HTMLElement | null = null;
+
+const DB_QUERY_PLACEHOLDER = `SELECT id, title, updated_at\nFROM sessions\nORDER BY updated_at DESC\nLIMIT 25;`;
+
+const DB_OPERATOR_LABELS: Record<DbFilterOperator, string> = {
+  contains: "contains",
+  equals: "equals",
+  not_equals: "not equals",
+  starts_with: "starts with",
+  ends_with: "ends with",
+  eq: "=",
+  neq: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+  is_null: "is null",
+  is_not_null: "is not null"
+};
 
 /* Helpers */
 
@@ -90,7 +149,7 @@ function renderHelpTip(text: string, title?: string, label = "?"): string {
 
 function tooltipAttrs(text: string): string {
   const safe = escapeHtml(text);
-  return `data-tooltip="${safe}" title="${safe}"`;
+  return `data-tooltip="${safe}"`;
 }
 
 function titleAttr(text: string): string {
@@ -322,11 +381,11 @@ function renderLogsView(data: LogsPageData): void {
     `;
 
   root.innerHTML = `
-    <div class="logs-view">
+    <div class="logs-view fade-in">
       <div class="logs-header">
         <div>
           <div class="detail-title">Logs</div>
-          <div class="logs-subtitle">Operational sync and export history that normally only shows up in the shell.</div>
+          <div class="logs-subtitle">Operational sync and export history that normally only shows up in the shell. ${renderHelpTip("Each card shows a sync or export operation with timing, metrics, and any errors. Expand a card to see per-source breakdowns and raw JSON.", "Logs")}</div>
         </div>
         <div class="logs-summary">
           <span class="log-summary-chip">${data.counts.total} entries</span>
@@ -341,6 +400,7 @@ function renderLogsView(data: LogsPageData): void {
           <button class="chip ${activeLogsFilter === "sync" ? "active" : ""}" type="button" data-logs-filter="sync">Sync</button>
           <button class="chip ${activeLogsFilter === "export" ? "active" : ""}" type="button" data-logs-filter="export">Exports</button>
           <button class="chip ${activeLogsFilter === "errors" ? "active" : ""}" type="button" data-logs-filter="errors">Errors</button>
+          ${renderHelpTip("Filter by operation type. Sync logs cover background imports from local source files. Export logs cover JSONL generation triggered from Sessions.", "Log Filters")}
         </div>
       </div>
       <div class="logs-list">
@@ -350,6 +410,1042 @@ function renderLogsView(data: LogsPageData): void {
   `;
 
   bindLogsControls();
+}
+
+function renderLogsListOnly(data: LogsPageData): void {
+  const listEl = document.querySelector<HTMLElement>(".logs-list");
+  if (!listEl) {
+    renderLogsView(data);
+    return;
+  }
+
+  const entries = filteredLogEntries(data);
+  const emptyHtml = data.entries.length === 0
+    ? `<div class="detail-empty"><div class="empty-state"><div class="empty-title">No logs yet</div><div class="empty-copy">Sync and export activity will show up here once Distill has operational history to surface.</div></div></div>`
+    : `<div class="detail-empty"><div class="empty-state"><div class="empty-title">No matching logs</div><div class="empty-copy">Adjust the log search or filters to widen the current result set.</div></div></div>`;
+
+  listEl.innerHTML = `<div class="fade-in">${entries.length ? entries.map(renderLogEntry).join("") : emptyHtml}</div>`;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function basenamePath(value: string): string {
+  const parts = value.split(/[\\/]/);
+  return parts[parts.length - 1] || value;
+}
+
+function defaultDbFilterOperator(column: DbColumnInfo): DbFilterOperator {
+  if (column.filterKind === "text") {
+    return "contains";
+  }
+
+  if (column.filterKind === "numeric" || column.filterKind === "date") {
+    return "eq";
+  }
+
+  return "equals";
+}
+
+function dbOperatorsForColumn(column: DbColumnInfo): DbFilterOperator[] {
+  if (column.filterKind === "text") {
+    return ["contains", "equals", "not_equals", "starts_with", "ends_with", "is_null", "is_not_null"];
+  }
+
+  if (column.filterKind === "numeric" || column.filterKind === "date") {
+    return ["eq", "neq", "gt", "gte", "lt", "lte", "is_null", "is_not_null"];
+  }
+
+  return ["equals", "not_equals", "is_null", "is_not_null"];
+}
+
+function dbOperatorNeedsValue(operator: DbFilterOperator): boolean {
+  return operator !== "is_null" && operator !== "is_not_null";
+}
+
+function getVisibleDbTables(snapshot = dbExplorerSnapshot): DbTableSummary[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  return dbShowInternalTables
+    ? [...snapshot.coreTables, ...snapshot.advancedTables]
+    : [...snapshot.coreTables];
+}
+
+function findDbTableSummary(tableName: string | null): DbTableSummary | undefined {
+  if (!tableName || !dbExplorerSnapshot) {
+    return undefined;
+  }
+
+  return [...dbExplorerSnapshot.coreTables, ...dbExplorerSnapshot.advancedTables].find(
+    (table) => table.name === tableName
+  );
+}
+
+function getDbVisibleColumns(): DbColumnInfo[] {
+  return dbBrowseResult?.schemaColumns.filter((column) => !column.isHidden) ?? [];
+}
+
+function createDefaultDbFilter(column = getDbVisibleColumns()[0]): DbFilter | null {
+  if (!column) {
+    return null;
+  }
+
+  return {
+    column: column.name,
+    operator: defaultDbFilterOperator(column),
+    value: ""
+  };
+}
+
+function formatDbRowCount(totalRows: DbRowCount): string {
+  return totalRows.toLocaleString();
+}
+
+function getDbPageCount(totalRows: DbRowCount, pageSize: number): number {
+  if (typeof totalRows === "bigint") {
+    if (totalRows <= 0n) {
+      return 1;
+    }
+
+    const pageCount = (totalRows + BigInt(pageSize) - 1n) / BigInt(pageSize);
+    return pageCount > BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number.MAX_SAFE_INTEGER
+      : Number(pageCount);
+  }
+
+  return Math.max(1, Math.ceil(totalRows / pageSize));
+}
+
+function normalizeDbSelectedTable(): void {
+  const visibleTables = getVisibleDbTables();
+  if (!visibleTables.length) {
+    dbSelectedTableName = null;
+    return;
+  }
+
+  if (dbSelectedTableName && visibleTables.some((table) => table.name === dbSelectedTableName)) {
+    return;
+  }
+
+  const defaultTableName = dbExplorerSnapshot?.defaultTableName;
+  const hasDefaultTable = defaultTableName
+    ? visibleTables.some((table) => table.name === defaultTableName)
+    : false;
+  dbSelectedTableName =
+    (hasDefaultTable ? defaultTableName : undefined)
+    ?? visibleTables[0]?.name
+    ?? null;
+}
+
+function renderDbEmptyState(title: string, copy: string, extraHtml = ""): string {
+  return `
+    <div class="detail-empty">
+      <div class="empty-state">
+        <div class="empty-title">${escapeHtml(title)}</div>
+        <div class="empty-copy">${escapeHtml(copy)}</div>
+        ${extraHtml}
+      </div>
+    </div>
+  `;
+}
+
+function renderDbSchemaChip(column: DbColumnInfo): string {
+  const badges = [
+    column.isPrimaryKey ? `<span class="badge badge-db-meta">pk</span>` : "",
+    column.isNullable ? `<span class="badge badge-db-meta">nullable</span>` : "",
+    column.isHidden ? `<span class="badge badge-db-hidden">hidden</span>` : ""
+  ].filter(Boolean).join("");
+
+  return `
+    <div class="db-schema-chip ${column.isHidden ? "is-hidden" : ""}">
+      <div class="db-schema-title">${escapeHtml(column.name)}</div>
+      <div class="db-schema-meta">
+        <span>${escapeHtml(column.type ?? "ANY")}</span>
+        ${badges}
+      </div>
+    </div>
+  `;
+}
+
+function renderDbTableItem(table: DbTableSummary): string {
+  return `
+    <button
+      class="session-item db-table-item ${dbSelectedTableName === table.name ? "selected" : ""}"
+      type="button"
+      data-db-table-name="${escapeHtml(table.name)}"
+    >
+      <div class="session-item-title">${escapeHtml(table.name)}</div>
+      <div class="session-item-meta">
+        <span class="badge ${table.kind === "virtual" ? "badge-db-virtual" : "badge-db-table"}">${escapeHtml(table.kind)}</span>
+        ${table.isCore ? `<span class="badge badge-db-core">core</span>` : `<span class="badge badge-db-advanced">internal</span>`}
+      </div>
+    </button>
+  `;
+}
+
+function renderDbSkeletonWorkspace(): string {
+  const schemaChips = Array.from({length: 6}, () =>
+    `<div class="skeleton-block" style="flex:0 0 auto;width:120px;height:58px;border-radius:10px"></div>`
+  ).join("");
+
+  const gridRows = Array.from({length: 8}, () =>
+    `<div class="skeleton-row" style="margin-bottom:4px"></div>`
+  ).join("");
+
+  return `
+    <div class="db-view fade-in" style="padding:20px 24px 48px">
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
+        <div class="skeleton-line" style="width:180px;height:18px"></div>
+        <div class="skeleton-line" style="width:320px;height:12px"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:20px">
+        <div class="skeleton-line" style="width:64px;height:30px;border-radius:6px"></div>
+        <div class="skeleton-line" style="width:56px;height:30px;border-radius:6px"></div>
+      </div>
+      <div style="margin-bottom:20px">
+        <div class="skeleton-line" style="width:60px;height:12px;margin-bottom:12px"></div>
+        <div style="display:flex;gap:10px;overflow:hidden">${schemaChips}</div>
+      </div>
+      <div>${gridRows}</div>
+    </div>
+  `;
+}
+
+function renderDbSidebar(): void {
+  const sessionsEl = document.querySelector<HTMLElement>("[data-sessions]");
+  const countEl = document.querySelector<HTMLElement>("[data-session-count]");
+  const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
+  const sourcesToggle = document.querySelector<HTMLElement>("[data-sources-toggle]");
+  const sourcesPanel = document.querySelector<HTMLElement>("[data-sources]");
+  const statsEl = document.querySelector<HTMLElement>("[data-stats]");
+  const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
+
+  if (!sessionsEl) {
+    return;
+  }
+
+  onboarding?.classList.remove("visible");
+  sourcesToggle?.classList.add("is-hidden");
+  sourcesPanel?.classList.remove("visible");
+  if (sourcesPanel) {
+    sourcesPanel.innerHTML = "";
+  }
+  if (statsEl) {
+    statsEl.innerHTML = "";
+  }
+
+  const visibleTables = getVisibleDbTables();
+  if (countEl) {
+    countEl.textContent = dbExplorerSnapshot ? `${visibleTables.length} tables` : "Tables";
+  }
+  if (scannedEl) {
+    scannedEl.textContent = dbExplorerSnapshot ? basenamePath(dbExplorerSnapshot.databasePath) : "";
+  }
+
+  if (dbExplorerLoading && !dbExplorerSnapshot) {
+    sessionsEl.innerHTML = `
+      <div class="fade-in" style="padding:12px 16px;display:flex;flex-direction:column;gap:6px">
+        <div class="skeleton-line" style="width:100px;height:12px;margin-bottom:4px"></div>
+        ${Array.from({length: 5}, () => `<div class="skeleton-block" style="height:42px"></div>`).join("")}
+      </div>
+    `;
+    return;
+  }
+
+  if (dbExplorerError) {
+    sessionsEl.innerHTML = `<div class="db-sidebar-message is-error">${escapeHtml(dbExplorerError)}</div>`;
+    return;
+  }
+
+  if (!dbExplorerSnapshot?.databaseExists) {
+    sessionsEl.innerHTML = `<div class="db-sidebar-message">No SQLite database found yet.</div>`;
+    return;
+  }
+
+  const coreMarkup = dbExplorerSnapshot.coreTables.length
+    ? `
+      <div class="db-sidebar-section">
+        <div class="db-sidebar-section-title">Core Tables</div>
+        ${dbExplorerSnapshot.coreTables.map(renderDbTableItem).join("")}
+      </div>
+    `
+    : "";
+
+  const advancedMarkup = dbShowInternalTables && dbExplorerSnapshot.advancedTables.length
+    ? `
+      <div class="db-sidebar-section">
+        <div class="db-sidebar-section-title">Internal Tables</div>
+        ${dbExplorerSnapshot.advancedTables.map(renderDbTableItem).join("")}
+      </div>
+    `
+    : "";
+
+  sessionsEl.innerHTML = `
+    <div class="fade-in">
+    <div class="db-sidebar-controls">
+      <label class="db-toggle">
+        <input type="checkbox" data-db-show-internal ${dbShowInternalTables ? "checked" : ""} />
+        <span>Show internal tables</span>
+        ${renderHelpTip("Internal tables are used by Distill for indexing, FTS, and metadata. They are safe to inspect but not typically needed for day-to-day browsing.", "Internal Tables")}
+      </label>
+      <div class="db-sidebar-copy">Read-only browser over ${escapeHtml(dbExplorerSnapshot.databasePath)}</div>
+    </div>
+    ${coreMarkup}
+    ${advancedMarkup}
+    </div>
+  `;
+}
+
+function renderDbFilterRow(filter: DbFilter, index: number, columns: DbColumnInfo[]): string {
+  const column = columns.find((entry) => entry.name === filter.column) ?? columns[0];
+  if (!column) {
+    return "";
+  }
+
+  const operatorOptions = dbOperatorsForColumn(column).map((operator) =>
+    `<option value="${operator}" ${filter.operator === operator ? "selected" : ""}>${escapeHtml(DB_OPERATOR_LABELS[operator])}</option>`
+  ).join("");
+
+  const columnOptions = columns.map((entry) =>
+    `<option value="${escapeHtml(entry.name)}" ${entry.name === column.name ? "selected" : ""}>${escapeHtml(entry.name)}</option>`
+  ).join("");
+
+  return `
+    <div class="db-filter-row">
+      <select class="db-select" data-db-filter-column="${index}">
+        ${columnOptions}
+      </select>
+      <select class="db-select" data-db-filter-operator="${index}">
+        ${operatorOptions}
+      </select>
+      ${dbOperatorNeedsValue(filter.operator)
+        ? `<input class="db-input" type="text" data-db-filter-value="${index}" value="${escapeHtml(filter.value ?? "")}" placeholder="Value" />`
+        : `<div class="db-null-pill">No value</div>`}
+      <button class="btn-ghost db-icon-button" type="button" data-db-remove-filter="${index}" title="Remove filter">×</button>
+    </div>
+  `;
+}
+
+function resolveDbSelectedRow(rows: DbResultRow[]): DbResultRow | undefined {
+  if (!rows.length) {
+    return undefined;
+  }
+
+  return rows.find((row) => row.key === dbSelectedRowKey) ?? rows[0];
+}
+
+function renderDbRowInspector(columns: DbResultColumn[], row: DbResultRow): string {
+  const fields = columns.map((column, index) => {
+    const cell = row.cells[index];
+    if (!cell) {
+      return "";
+    }
+
+    const notes = [
+      cell.detailTruncated ? `<div class="db-field-note">Value truncated to 8 KB for display.</div>` : "",
+      cell.kind === "blob" && cell.byteLength
+        ? `<div class="db-field-note">Blob preview only. ${cell.byteLength} bytes.</div>`
+        : ""
+    ].filter(Boolean).join("");
+
+    return `
+      <div class="db-field">
+        <div class="db-field-header">
+          <span class="db-field-name">${escapeHtml(column.name)}</span>
+          ${column.type ? `<span class="db-field-type">${escapeHtml(column.type)}</span>` : ""}
+        </div>
+        <pre class="db-field-value">${escapeHtml(cell.detail)}</pre>
+        ${notes}
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <section class="db-row-inspector">
+      <div class="db-section-title">Row Inspector ${renderHelpTip("Click any row in the table above to see all of its column values here. Long text and blob values are shown in full.", "Row Inspector")}</div>
+      <div class="db-field-grid">
+        ${fields}
+      </div>
+    </section>
+  `;
+}
+
+function renderDbResultGrid(
+  columns: DbResultColumn[],
+  rows: DbResultRow[],
+  emptyTitle: string,
+  emptyCopy: string,
+  notice?: string
+): string {
+  if (!rows.length) {
+    return renderDbEmptyState(emptyTitle, emptyCopy);
+  }
+
+  const selectedRow = resolveDbSelectedRow(rows);
+  const selectedRowKey = selectedRow?.key;
+  const headerMarkup = columns.map((column) => `
+    <th ${column.table || column.type ? titleAttr(
+      [column.table, column.sourceColumn, column.type].filter(Boolean).join(" • ")
+    ) : ""}>
+      <div class="db-grid-head">
+        <span>${escapeHtml(column.name)}</span>
+        ${column.type ? `<span>${escapeHtml(column.type)}</span>` : ""}
+      </div>
+    </th>
+  `).join("");
+
+  const rowMarkup = rows.map((row) => `
+    <tr
+      class="${selectedRowKey === row.key ? "selected" : ""}"
+      data-db-row-key="${escapeHtml(row.key)}"
+      tabindex="0"
+    >
+      ${row.cells.map((cell) => `
+        <td class="db-cell-${cell.kind}" ${titleAttr(cell.preview)}>
+          ${escapeHtml(cell.preview)}
+        </td>
+      `).join("")}
+    </tr>
+  `).join("");
+
+  return `
+    ${notice ? `<div class="db-inline-notice">${escapeHtml(notice)}</div>` : ""}
+    <div class="db-grid-shell">
+      <div class="db-grid-wrap">
+        <table class="db-grid">
+          <thead>
+            <tr>${headerMarkup}</tr>
+          </thead>
+          <tbody>${rowMarkup}</tbody>
+        </table>
+      </div>
+      ${selectedRow ? renderDbRowInspector(columns, selectedRow) : ""}
+    </div>
+  `;
+}
+
+function renderDbBrowseTab(): string {
+  if (dbBrowseLoading && !dbBrowseResult) {
+    const skeletonRows = Array.from({length: 6}, () =>
+      `<div class="skeleton-row" style="margin-bottom:4px"></div>`
+    ).join("");
+    return `
+      <section class="db-panel fade-in">
+        <div class="db-toolbar-row" style="pointer-events:none;opacity:0.5">
+          <div class="db-toolbar-group">
+            <div class="skeleton-line" style="width:60px;height:12px;margin-bottom:12px"></div>
+            <div class="skeleton-line" style="width:100%;height:34px;border-radius:8px"></div>
+          </div>
+          <div class="db-toolbar-group">
+            <div class="skeleton-line" style="width:40px;height:12px;margin-bottom:12px"></div>
+            <div class="skeleton-line" style="width:100%;height:34px;border-radius:8px"></div>
+          </div>
+        </div>
+        <div style="padding:0 16px 16px">${skeletonRows}</div>
+      </section>
+    `;
+  }
+
+  if (dbBrowseError) {
+    return renderDbEmptyState("Browse unavailable", dbBrowseError);
+  }
+
+  if (!dbBrowseResult) {
+    return renderDbEmptyState("Select a table", "Choose a table from the left to browse rows and schema.");
+  }
+
+  const columns = getDbVisibleColumns();
+  const sort = dbBrowseSort ?? dbBrowseResult.sort;
+  const filterRows = dbBrowseFilters.length
+    ? dbBrowseFilters.map((filter, index) => renderDbFilterRow(filter, index, columns)).join("")
+    : `<div class="db-filter-empty">No filters applied. Add one to narrow the current table.</div>`;
+  const pageCount = getDbPageCount(dbBrowseResult.totalRows, dbBrowseResult.pageSize);
+  const canGoBack = dbBrowseResult.page > 1;
+  const canGoForward = dbBrowseResult.page < pageCount;
+  const sortColumnOptions = columns.map((column) =>
+    `<option value="${escapeHtml(column.name)}" ${sort.column === column.name ? "selected" : ""}>${escapeHtml(column.name)}</option>`
+  ).join("");
+
+  return `
+    <section class="db-panel">
+      <div class="db-toolbar-row">
+        <div class="db-toolbar-group">
+          <div class="db-section-title">Filters ${renderHelpTip("Add column filters to narrow the visible rows. Choose a column, an operator, and a value. Click Apply to execute.", "Filters")}</div>
+          ${filterRows}
+          <div class="db-filter-actions">
+            <button class="btn-ghost" type="button" data-db-add-filter ${columns.length ? "" : "disabled"}>+ Filter</button>
+            <button class="btn-primary" type="button" data-db-apply-browse ${dbBrowseLoading ? "disabled" : ""}>${dbBrowseLoading ? '<span class="spinner spinner--small"></span> Applying\u2026' : "Apply"}</button>
+            <button class="btn-ghost" type="button" data-db-reset-browse>Reset</button>
+          </div>
+        </div>
+        <div class="db-toolbar-group">
+          <div class="db-section-title">Sort</div>
+          <div class="db-sort-row">
+            <select class="db-select" data-db-sort-column ${columns.length ? "" : "disabled"}>
+              ${sortColumnOptions}
+            </select>
+            <select class="db-select" data-db-sort-direction>
+              <option value="asc" ${sort.direction === "asc" ? "selected" : ""}>asc</option>
+              <option value="desc" ${sort.direction === "desc" ? "selected" : ""}>desc</option>
+            </select>
+          </div>
+          <div class="db-sort-divider"></div>
+          <div class="db-section-title">Per Page</div>
+          <div class="db-sort-row">
+            <select class="db-select" data-db-page-size>
+              <option value="25" ${dbBrowsePageSize === 25 ? "selected" : ""}>25 rows</option>
+              <option value="50" ${dbBrowsePageSize === 50 ? "selected" : ""}>50 rows</option>
+              <option value="100" ${dbBrowsePageSize === 100 ? "selected" : ""}>100 rows</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      ${renderDbResultGrid(
+        dbBrowseResult.columns,
+        dbBrowseResult.rows,
+        "No matching rows",
+        "Adjust the current filters or choose a different table."
+      )}
+      <div class="db-pagination">
+        <button class="btn-ghost" type="button" data-db-page="prev" ${canGoBack ? "" : "disabled"}>← Prev</button>
+        <span>Page ${dbBrowseResult.page} of ${pageCount}</span>
+        <button class="btn-ghost" type="button" data-db-page="next" ${canGoForward ? "" : "disabled"}>Next →</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderDbQueryTab(): string {
+  const queryResultMarkup =
+    dbQueryRunning && !dbQueryResult
+      ? `<div class="detail-empty"><div class="empty-state"><div class="spinner" style="margin-bottom:16px"></div><div class="empty-copy">Executing query\u2026</div></div></div>`
+      : dbQueryError
+        ? renderDbEmptyState("Query failed", dbQueryError)
+        : dbQueryResult
+          ? renderDbResultGrid(
+            dbQueryResult.columns,
+            dbQueryResult.rows,
+            "Query returned no rows",
+            "The statement ran successfully but there was nothing to display.",
+            dbQueryResult.truncated ? "Showing the first 100 rows. Refine the query to inspect more data." : undefined
+          )
+          : renderDbEmptyState("Run a read-only query", "Custom SQL is read-only and limited to one statement.");
+
+  return `
+    <section class="db-panel">
+      <div class="db-query-shell">
+        <div class="db-query-header">
+          <div class="db-section-title">Custom SQL ${renderHelpTip("Write and run a single read-only SQL statement against the Distill database. Results are limited to 100 rows. Use Ctrl/Cmd+Enter as a shortcut.", "Custom SQL")}</div>
+          <div class="db-query-copy">Single read-only statement.</div>
+        </div>
+        <textarea
+          class="db-query-editor"
+          data-db-query-input
+          placeholder="${escapeHtml(DB_QUERY_PLACEHOLDER)}"
+        >${escapeHtml(dbQueryText)}</textarea>
+        <div class="db-query-actions">
+          <button class="btn-primary" type="button" data-db-run-query ${dbQueryRunning ? "disabled" : ""}>${dbQueryRunning ? '<span class="spinner spinner--small"></span> Running\u2026' : "Run Query"}</button>
+          <span class="db-query-hint">Use Ctrl/Cmd + Enter to run the current query.</span>
+        </div>
+        ${dbQueryIsStale ? `<div class="db-inline-notice">Results may be stale after sync. Rerun the query.</div>` : ""}
+      </div>
+      ${queryResultMarkup}
+    </section>
+  `;
+}
+
+function renderDbWorkspace(): void {
+  const root = document.querySelector<HTMLElement>("[data-session-detail]");
+  if (!root) return;
+
+  if (dbExplorerLoading && !dbExplorerSnapshot) {
+    root.innerHTML = renderDbSkeletonWorkspace();
+    return;
+  }
+
+  if (dbExplorerError) {
+    root.innerHTML = renderDbEmptyState("Database unavailable", dbExplorerError);
+    return;
+  }
+
+  if (!dbExplorerSnapshot?.databaseExists) {
+    root.innerHTML = renderDbEmptyState(
+      "No database yet",
+      "Distill has not created a local SQLite database yet.",
+      dbExplorerSnapshot
+        ? `<div class="db-empty-code">${escapeHtml(dbExplorerSnapshot.databasePath)}</div>`
+        : ""
+    );
+    return;
+  }
+
+  if (!dbSelectedTableName) {
+    root.innerHTML = renderDbEmptyState("No tables available", "The current database does not expose any browseable tables.");
+    return;
+  }
+
+  const table = findDbTableSummary(dbSelectedTableName);
+  const visibleColumnCount = dbBrowseResult?.schemaColumns.filter((column) => !column.isHidden).length ?? 0;
+  const rowCountLabel = dbBrowseResult
+    ? `${formatDbRowCount(dbBrowseResult.totalRows)} rows`
+    : dbBrowseLoading ? "Loading rows…" : "0 rows";
+  const schemaStrip = dbBrowseResult
+    ? dbBrowseResult.schemaColumns.map(renderDbSchemaChip).join("")
+    : `<div class="db-schema-empty">Schema will appear once the selected table finishes loading.</div>`;
+
+  root.innerHTML = `
+    <div class="db-view fade-in">
+      <div class="detail-toolbar">
+        <span class="detail-title">DB Explorer ${renderHelpTip("A read-only browser over the Distill SQLite database. Inspect tables, filter rows, view schema, and run custom SQL queries. No data is modified.", "DB Explorer")}</span>
+        <div class="detail-meta-secondary">
+          <span class="badge ${table?.kind === "virtual" ? "badge-db-virtual" : "badge-db-table"}">${escapeHtml(table?.kind ?? "table")}</span>
+          <span>${escapeHtml(dbSelectedTableName)}</span>
+          <span>${escapeHtml(rowCountLabel)}</span>
+          <span>${visibleColumnCount} visible cols</span>
+          <span class="db-path-label">${escapeHtml(dbExplorerSnapshot.databasePath)}</span>
+        </div>
+      </div>
+      <div class="db-subtabs">
+        <button class="chip ${dbActiveTab === "browse" ? "active" : ""}" type="button" data-db-tab="browse">Browse</button>
+        <button class="chip ${dbActiveTab === "query" ? "active" : ""}" type="button" data-db-tab="query">Query</button>
+      </div>
+      <section class="db-schema-section">
+        <div class="db-section-title db-section-title--prominent">Schema ${renderHelpTip("Each chip shows a column in the selected table with its SQLite type, primary-key status, and nullability. Hidden columns are excluded from the browse grid.", "Schema")}</div>
+        <div class="db-schema-strip">
+          ${schemaStrip}
+        </div>
+      </section>
+      ${dbActiveTab === "browse" ? renderDbBrowseTab() : renderDbQueryTab()}
+    </div>
+  `;
+
+  bindDbViewControls();
+}
+
+async function loadDbExplorerSnapshot(): Promise<void> {
+  const token = ++dbSnapshotRequestToken;
+  dbExplorerLoading = true;
+  dbExplorerError = null;
+
+  if (activeView === "db") {
+    renderCurrentView();
+  }
+
+  try {
+    const snapshot = await window.distillApi.getDbExplorerSnapshot();
+    if (token !== dbSnapshotRequestToken) {
+      return;
+    }
+
+    dbExplorerSnapshot = snapshot;
+    dbExplorerError = null;
+    normalizeDbSelectedTable();
+
+    if (!snapshot.databaseExists) {
+      dbBrowseResult = null;
+      dbBrowseError = null;
+      dbSelectedRowKey = null;
+      return;
+    }
+  } catch (error) {
+    if (token !== dbSnapshotRequestToken) {
+      return;
+    }
+
+    dbExplorerSnapshot = null;
+    dbExplorerError = getErrorMessage(error);
+    dbBrowseResult = null;
+    dbBrowseError = null;
+    dbSelectedRowKey = null;
+    return;
+  } finally {
+    if (token === dbSnapshotRequestToken) {
+      dbExplorerLoading = false;
+      if (activeView === "db") {
+        renderCurrentView();
+      }
+    }
+  }
+
+}
+
+async function loadDbBrowseResult(): Promise<void> {
+  if (!dbExplorerSnapshot?.databaseExists || !dbSelectedTableName) {
+    return;
+  }
+
+  const token = ++dbBrowseRequestToken;
+  dbBrowseLoading = true;
+  dbBrowseError = null;
+  dbBrowseResult = dbBrowseResult?.table.name === dbSelectedTableName ? dbBrowseResult : null;
+
+  if (activeView === "db") {
+    renderCurrentView();
+  }
+
+  try {
+    const result = await window.distillApi.browseDbTable({
+      tableName: dbSelectedTableName,
+      filters: dbBrowseFilters,
+      sort: dbBrowseSort,
+      page: dbBrowsePage,
+      pageSize: dbBrowsePageSize
+    });
+
+    if (token !== dbBrowseRequestToken) {
+      return;
+    }
+
+    dbBrowseResult = result;
+    dbBrowseError = null;
+    dbBrowseFilters = result.appliedFilters;
+    dbBrowseSort = result.sort;
+    dbBrowsePage = result.page;
+    dbBrowsePageSize = result.pageSize;
+    dbSelectedRowKey = result.rows[0]?.key ?? null;
+  } catch (error) {
+    if (token !== dbBrowseRequestToken) {
+      return;
+    }
+
+    dbBrowseResult = null;
+    dbBrowseError = getErrorMessage(error);
+    dbSelectedRowKey = null;
+  } finally {
+    if (token === dbBrowseRequestToken) {
+      dbBrowseLoading = false;
+      if (activeView === "db" && (dbBrowseResult !== null || dbBrowseError !== null)) {
+        renderCurrentView();
+      }
+    }
+  }
+}
+
+async function executeDbQuery(): Promise<void> {
+  if (dbQueryRunning) {
+    return;
+  }
+
+  const token = ++dbQueryRequestToken;
+  dbQueryRunning = true;
+  dbQueryError = null;
+  dbQueryResult = null;
+  dbQueryIsStale = false;
+  dbSelectedRowKey = null;
+
+  if (activeView === "db") {
+    renderCurrentView();
+  }
+
+  try {
+    const result = await window.distillApi.runDbQuery({
+      sql: dbQueryText
+    });
+
+    if (token !== dbQueryRequestToken) {
+      return;
+    }
+
+    dbQueryResult = result;
+    dbQueryError = null;
+    dbQueryIsStale = false;
+    dbSelectedRowKey = result.rows[0]?.key ?? null;
+  } catch (error) {
+    if (token !== dbQueryRequestToken) {
+      return;
+    }
+
+    dbQueryResult = null;
+    dbQueryError = getErrorMessage(error);
+    dbSelectedRowKey = null;
+  } finally {
+    if (token === dbQueryRequestToken) {
+      dbQueryRunning = false;
+      if (activeView === "db") {
+        renderCurrentView();
+      }
+    }
+  }
+}
+
+function ensureDbViewData(): void {
+  if (!dbExplorerSnapshot && !dbExplorerLoading && !dbExplorerError) {
+    void loadDbExplorerSnapshot();
+    return;
+  }
+
+  if (
+    dbExplorerSnapshot?.databaseExists
+    && dbSelectedTableName
+    && !dbBrowseResult
+    && !dbBrowseLoading
+    && !dbBrowseError
+  ) {
+    void loadDbBrowseResult();
+  }
+}
+
+function refreshDbAfterSync(): void {
+  dbQueryIsStale = Boolean(dbQueryResult);
+  void loadDbExplorerSnapshot();
+}
+
+function bindDbViewControls(): void {
+  const showInternal = document.querySelector<HTMLInputElement>("[data-db-show-internal]");
+  if (showInternal) {
+    showInternal.onchange = () => {
+      dbShowInternalTables = showInternal.checked;
+      normalizeDbSelectedTable();
+      if (dbSelectedTableName) {
+        dbBrowseFilters = [];
+        dbBrowseSort = undefined;
+        dbBrowsePage = 1;
+        dbBrowseResult = null;
+        dbBrowseError = null;
+        void loadDbBrowseResult();
+      }
+      renderCurrentView();
+    };
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-db-table-name]")) {
+    btn.onclick = () => {
+      const tableName = btn.dataset.dbTableName;
+      if (!tableName || tableName === dbSelectedTableName) {
+        return;
+      }
+
+      dbSelectedTableName = tableName;
+      dbBrowseFilters = [];
+      dbBrowseSort = undefined;
+      dbBrowsePage = 1;
+      dbBrowseResult = null;
+      dbBrowseError = null;
+      dbSelectedRowKey = null;
+      void loadDbBrowseResult();
+    };
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-db-tab]")) {
+    btn.onclick = () => {
+      const tab = btn.dataset.dbTab;
+      if (tab !== "browse" && tab !== "query") {
+        return;
+      }
+
+      dbActiveTab = tab;
+      renderCurrentView();
+    };
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-db-row-key]")) {
+    btn.onclick = () => {
+      const rowKey = btn.dataset.dbRowKey;
+      if (!rowKey) {
+        return;
+      }
+
+      dbSelectedRowKey = rowKey;
+      renderCurrentView();
+    };
+
+    btn.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+
+      if (event.key === " ") {
+        event.preventDefault();
+      }
+
+      btn.click();
+    };
+  }
+
+  const visibleColumns = getDbVisibleColumns();
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-db-add-filter]")) {
+    btn.onclick = () => {
+      const filter = createDefaultDbFilter();
+      if (!filter) {
+        return;
+      }
+
+      dbBrowseFilters = [...dbBrowseFilters, filter];
+      renderCurrentView();
+    };
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-db-remove-filter]")) {
+    btn.onclick = () => {
+      const index = Number(btn.dataset.dbRemoveFilter);
+      if (!Number.isFinite(index)) {
+        return;
+      }
+
+      dbBrowseFilters = dbBrowseFilters.filter((_filter, filterIndex) => filterIndex !== index);
+      renderCurrentView();
+    };
+  }
+
+  for (const select of document.querySelectorAll<HTMLSelectElement>("[data-db-filter-column]")) {
+    select.onchange = () => {
+      const index = Number(select.dataset.dbFilterColumn);
+      const column = visibleColumns.find((entry) => entry.name === select.value);
+      if (!Number.isFinite(index) || !column) {
+        return;
+      }
+
+      const nextFilters = [...dbBrowseFilters];
+      nextFilters[index] = {
+        column: column.name,
+        operator: defaultDbFilterOperator(column),
+        value: ""
+      };
+      dbBrowseFilters = nextFilters;
+      renderCurrentView();
+    };
+  }
+
+  for (const select of document.querySelectorAll<HTMLSelectElement>("[data-db-filter-operator]")) {
+    select.onchange = () => {
+      const index = Number(select.dataset.dbFilterOperator);
+      if (!Number.isFinite(index)) {
+        return;
+      }
+
+      const nextFilters = [...dbBrowseFilters];
+      const current = nextFilters[index];
+      if (!current) {
+        return;
+      }
+
+      nextFilters[index] = {
+        ...current,
+        operator: select.value as DbFilterOperator,
+        value: dbOperatorNeedsValue(select.value as DbFilterOperator) ? current.value ?? "" : ""
+      };
+      dbBrowseFilters = nextFilters;
+      renderCurrentView();
+    };
+  }
+
+  for (const input of document.querySelectorAll<HTMLInputElement>("[data-db-filter-value]")) {
+    input.oninput = () => {
+      const index = Number(input.dataset.dbFilterValue);
+      if (!Number.isFinite(index)) {
+        return;
+      }
+
+      const nextFilters = [...dbBrowseFilters];
+      const current = nextFilters[index];
+      if (!current) {
+        return;
+      }
+
+      nextFilters[index] = {
+        ...current,
+        value: input.value
+      };
+      dbBrowseFilters = nextFilters;
+    };
+  }
+
+  const sortColumn = document.querySelector<HTMLSelectElement>("[data-db-sort-column]");
+  if (sortColumn) {
+    sortColumn.onchange = () => {
+      dbBrowseSort = {
+        column: sortColumn.value,
+        direction: dbBrowseSort?.direction ?? dbBrowseResult?.sort.direction ?? "desc"
+      };
+    };
+  }
+
+  const sortDirection = document.querySelector<HTMLSelectElement>("[data-db-sort-direction]");
+  if (sortDirection) {
+    sortDirection.onchange = () => {
+      dbBrowseSort = {
+        column: dbBrowseSort?.column ?? dbBrowseResult?.sort.column ?? visibleColumns[0]?.name ?? "",
+        direction: sortDirection.value === "asc" ? "asc" : "desc"
+      };
+    };
+  }
+
+  const pageSize = document.querySelector<HTMLSelectElement>("[data-db-page-size]");
+  if (pageSize) {
+    pageSize.onchange = () => {
+      dbBrowsePageSize = Number(pageSize.value);
+    };
+  }
+
+  const applyBrowse = document.querySelector<HTMLElement>("[data-db-apply-browse]");
+  if (applyBrowse) {
+    applyBrowse.onclick = () => {
+      dbBrowsePage = 1;
+      void loadDbBrowseResult();
+    };
+  }
+
+  const resetBrowse = document.querySelector<HTMLElement>("[data-db-reset-browse]");
+  if (resetBrowse) {
+    resetBrowse.onclick = () => {
+      dbBrowseFilters = [];
+      dbBrowseSort = undefined;
+      dbBrowsePage = 1;
+      dbBrowsePageSize = 50;
+      void loadDbBrowseResult();
+    };
+  }
+
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-db-page]")) {
+    btn.onclick = () => {
+      const direction = btn.dataset.dbPage;
+      if (direction === "prev" && dbBrowsePage > 1) {
+        dbBrowsePage -= 1;
+        void loadDbBrowseResult();
+      } else if (direction === "next" && dbBrowseResult) {
+        const pageCount = getDbPageCount(dbBrowseResult.totalRows, dbBrowseResult.pageSize);
+        if (dbBrowsePage < pageCount) {
+          dbBrowsePage += 1;
+          void loadDbBrowseResult();
+        }
+      }
+    };
+  }
+
+  const queryInput = document.querySelector<HTMLTextAreaElement>("[data-db-query-input]");
+  if (queryInput) {
+    queryInput.oninput = () => {
+      dbQueryText = queryInput.value;
+    };
+
+    queryInput.onkeydown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        if (dbQueryRunning) {
+          return;
+        }
+        void executeDbQuery();
+      }
+    };
+  }
+
+  const runQuery = document.querySelector<HTMLElement>("[data-db-run-query]");
+  if (runQuery) {
+    runQuery.onclick = () => {
+      if (dbQueryRunning) {
+        return;
+      }
+      void executeDbQuery();
+    };
+  }
 }
 
 /* Sources */
@@ -478,6 +1574,7 @@ function renderSettingsPanel(settings: AppSettingsSnapshot): string {
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Codex archived sessions and history files.")}><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Claude Code project session files and history.")}><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
           <div class="settings-row" ${tooltipAttrs("SQLite database path used to discover OpenCode sessions.")}><span>OpenCode DB</span><span class="settings-note">${escapeHtml(settings.opencodeDatabasePath)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("Whether OPENCODE_DB_PATH is explicitly set in the environment instead of using the default OpenCode database path.")}><span>OPENCODE_DB_PATH override</span><span class="settings-note">${settings.envOverrides.opencodeDbPath ? "on" : "off"}</span></div>
           <div class="settings-row" ${tooltipAttrs("OpenCode config directory used for runtime configuration.")}><span>OpenCode config</span><span class="settings-note">${escapeHtml(settings.opencodeConfigDir)}</span></div>
           <div class="settings-row" ${tooltipAttrs("OpenCode state directory used for prompt history and related local state.")}><span>OpenCode state</span><span class="settings-note">${escapeHtml(settings.opencodeStateDir)}</span></div>
         </div>
@@ -508,9 +1605,11 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
   const root = document.querySelector<HTMLElement>("[data-session-detail]");
   if (!root) return;
 
+  root.scrollTop = 0;
+
   if (!detail) {
     root.innerHTML = `
-      <div class="detail-empty">
+      <div class="detail-empty fade-in">
         <div class="empty-state">
           <div class="empty-title">Select a session</div>
           <div class="empty-copy">Choose a conversation from the left to inspect the transcript, labels, tags, and artifacts.</div>
@@ -560,10 +1659,11 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     : "";
 
   root.innerHTML = `
+    <div class="fade-in">
     <div class="detail-toolbar">
       <span class="detail-title">${escapeHtml(detail.title)}</span>
       <div class="dropdown" data-export-dropdown>
-        <button class="btn btn-secondary" data-export-toggle>\u2913 Export</button>
+        <button class="btn btn-secondary" data-export-toggle ${tooltipAttrs("Export labeled sessions (train, holdout, or favorite) as JSONL files.")}>\u2913 Export</button>
         <div class="dropdown-menu" data-export-menu>
           <button class="dropdown-item" data-export-label="train">Export training set</button>
           <button class="dropdown-item" data-export-label="holdout">Export holdout set</button>
@@ -596,6 +1696,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     </div>
     ${artifacts}
     <div class="message-list">${messages}</div>
+    </div>
   `;
 
   bindDetailCuration(detail.id);
@@ -660,9 +1761,10 @@ function renderSessionList(items: Array<SessionListItem | SearchResult>): void {
   if (!container) return;
 
   const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
-  container.innerHTML = query
+  const listHtml = query
     ? (items as SearchResult[]).map(renderSearchItem).join("")
     : (items as SessionListItem[]).map(renderSessionItem).join("");
+  container.innerHTML = `<div class="fade-in">${listHtml}</div>`;
 
   bindSessionClicks();
 }
@@ -724,13 +1826,16 @@ function bindExportDropdown(): void {
 function bindSyncButton(): void {
   const syncBtn = document.querySelector<HTMLElement>("[data-sync-now]");
   if (syncBtn) {
+    const originalLabel = syncBtn.innerHTML;
     syncBtn.onclick = async () => {
       syncBtn.setAttribute("disabled", "true");
+      syncBtn.innerHTML = '<span class="spinner spinner--small"></span> Syncing\u2026';
       try {
         const status = await window.distillApi.requestBackgroundSync();
         renderSyncStatus(status);
       } finally {
         syncBtn.removeAttribute("disabled");
+        syncBtn.innerHTML = originalLabel;
       }
     };
   }
@@ -781,104 +1886,122 @@ function positionFloating(floatEl: HTMLElement, anchorRect: DOMRect, preferAbove
   floatEl.style.top = `${top}px`;
 }
 
-function bindTooltips(): void {
-  if (tooltipPositionsBound) return;
+function tooltipFloatEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-tooltip-float]");
+}
 
-  const maybeFloat = document.querySelector<HTMLElement>("[data-tooltip-float]");
-  if (!maybeFloat) return;
-  const floatEl: HTMLElement = maybeFloat;
+function helpPopoverEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-help-popover]");
+}
 
-  let showTimeout: ReturnType<typeof setTimeout> | null = null;
-  let activeEl: HTMLElement | null = null;
+function clearTooltipShowTimeout(): void {
+  if (!tooltipShowTimeout) return;
+  clearTimeout(tooltipShowTimeout);
+  tooltipShowTimeout = null;
+}
 
-  function show(el: HTMLElement): void {
-    const text = el.dataset.tooltip;
-    if (!text) return;
-    activeEl = el;
-    floatEl.textContent = text;
-    floatEl.classList.add("visible");
-    positionFloating(floatEl, el.getBoundingClientRect(), true);
-  }
+function hideFloatingElement(el: HTMLElement | null): void {
+  if (!el) return;
+  el.classList.remove("visible");
+}
 
-  function hide(): void {
-    if (showTimeout) { clearTimeout(showTimeout); showTimeout = null; }
-    floatEl.classList.remove("visible");
-    activeEl = null;
-  }
+function dismissTooltip(): void {
+  clearTooltipShowTimeout();
+  hideFloatingElement(tooltipFloatEl());
+  activeTooltipAnchor = null;
+}
+
+function dismissHelpPopover(): void {
+  hideFloatingElement(helpPopoverEl());
+  activeHelpTipAnchor = null;
+}
+
+function dismissFloatingOverlays(): void {
+  dismissTooltip();
+  dismissHelpPopover();
+}
+
+function showFloatingElement(
+  el: HTMLElement | null,
+  anchor: HTMLElement,
+  render: (surface: HTMLElement) => void
+): void {
+  if (!el || !anchor.isConnected) return;
+  render(el);
+  el.classList.add("visible");
+  positionFloating(el, anchor.getBoundingClientRect(), true);
+}
+
+function bindFloatingOverlays(): void {
+  if (floatingOverlaysBound) return;
 
   document.addEventListener("mouseenter", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const el = target.closest<HTMLElement>("[data-tooltip]");
-    if (!el) return;
-    hide();
-    showTimeout = setTimeout(() => show(el), 250);
+    const anchor = target.closest<HTMLElement>("[data-tooltip]");
+    if (!anchor) return;
+
+    dismissTooltip();
+    tooltipShowTimeout = setTimeout(() => {
+      const text = anchor.dataset.tooltip;
+      if (!text || !anchor.isConnected) return;
+      activeTooltipAnchor = anchor;
+      showFloatingElement(tooltipFloatEl(), anchor, (surface) => {
+        surface.textContent = text;
+      });
+    }, 180);
   }, true);
 
   document.addEventListener("mouseleave", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const el = target.closest<HTMLElement>("[data-tooltip]");
-    if (el && el === activeEl) hide();
+    const anchor = target.closest<HTMLElement>("[data-tooltip]");
+    if (!anchor) return;
+    if (activeTooltipAnchor === anchor) {
+      dismissTooltip();
+      return;
+    }
+    clearTooltipShowTimeout();
   }, true);
 
-  document.addEventListener("scroll", hide, true);
-  tooltipPositionsBound = true;
-}
-
-let helpTipsBound = false;
-
-function bindHelpTips(): void {
-  if (helpTipsBound) return;
-
-  const maybePopover = document.querySelector<HTMLElement>("[data-help-popover]");
-  if (!maybePopover) return;
-  const popoverEl: HTMLElement = maybePopover;
-
-  let activeHelpTip: HTMLElement | null = null;
-
-  function dismissPopover(): void {
-    popoverEl.classList.remove("visible");
-    activeHelpTip = null;
-  }
-
-  // Event delegation: handles any [data-help-tip] click, including dynamically rendered ones
-  document.addEventListener("click", (e) => {
-    const target = e.target;
+  document.addEventListener("click", (event) => {
+    const target = event.target;
     if (!(target instanceof Element)) return;
 
     const tip = target.closest<HTMLElement>("[data-help-tip]");
     if (tip) {
-      e.stopPropagation();
+      event.preventDefault();
+      event.stopPropagation();
+      dismissTooltip();
       const text = tip.dataset.helpTip;
       if (!text) return;
 
-      // Toggle if clicking the same tip
-      if (activeHelpTip === tip) {
-        dismissPopover();
+      if (activeHelpTipAnchor === tip) {
+        dismissHelpPopover();
         return;
       }
 
-      activeHelpTip = tip;
-      const popoverTitle = tip.dataset.helpTitle || "Help";
-      popoverEl.innerHTML = `<div class="help-popover-title">${escapeHtml(popoverTitle)}</div><div>${escapeHtml(text)}</div>`;
-      popoverEl.classList.add("visible");
-      positionFloating(popoverEl, tip.getBoundingClientRect(), true);
+      activeHelpTipAnchor = tip;
+      showFloatingElement(helpPopoverEl(), tip, (surface) => {
+        const popoverTitle = tip.dataset.helpTitle || "Help";
+        surface.innerHTML = `<div class="help-popover-title">${escapeHtml(popoverTitle)}</div><div>${escapeHtml(text)}</div>`;
+      });
       return;
     }
 
-    // Click-away dismissal
-    if (!activeHelpTip) return;
-    if (popoverEl.contains(target)) return;
-    dismissPopover();
-  });
-
-  // Dismiss on scroll
-  document.addEventListener("scroll", () => {
-    if (activeHelpTip) dismissPopover();
+    const popover = helpPopoverEl();
+    if (popover && popover.contains(target)) return;
+    dismissHelpPopover();
   }, true);
 
-  helpTipsBound = true;
+  document.addEventListener("scroll", dismissFloatingOverlays, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") dismissFloatingOverlays();
+  });
+  window.addEventListener("resize", dismissFloatingOverlays);
+  window.addEventListener("blur", dismissFloatingOverlays);
+
+  floatingOverlaysBound = true;
 }
 
 function bindSourceColorPickers(): void {
@@ -949,11 +2072,13 @@ function bindViewSwitch(): void {
   for (const btn of document.querySelectorAll<HTMLElement>("[data-view-target]")) {
     btn.onclick = () => {
       const target = btn.dataset.viewTarget;
-      if (target !== "sessions" && target !== "logs") return;
+      if (target !== "sessions" && target !== "db" && target !== "logs") return;
       if (activeView === target) return;
       activeView = target;
       if (activeView === "logs") {
         refreshLogsData(false);
+      } else if (activeView === "db") {
+        ensureDbViewData();
       }
       renderCurrentView();
     };
@@ -966,7 +2091,7 @@ function bindLogsControls(): void {
     input.oninput = () => {
       logsSearchQuery = input.value;
       if (logsPageData) {
-        renderLogsView(logsPageData);
+        renderLogsListOnly(logsPageData);
       }
     };
   }
@@ -976,8 +2101,11 @@ function bindLogsControls(): void {
       const filter = btn.dataset.logsFilter;
       if (filter !== "all" && filter !== "sync" && filter !== "export" && filter !== "errors") return;
       activeLogsFilter = filter;
+      for (const other of document.querySelectorAll<HTMLElement>("[data-logs-filter]")) {
+        other.classList.toggle("active", other.dataset.logsFilter === filter);
+      }
       if (logsPageData) {
-        renderLogsView(logsPageData);
+        renderLogsListOnly(logsPageData);
       }
     };
   }
@@ -994,6 +2122,9 @@ function bindBackgroundSync(): void {
 
     if (status.state === "completed") {
       dashboardData = window.distillApi.getDashboardData();
+      if (activeView === "db") {
+        refreshDbAfterSync();
+      }
     }
 
     if (activeView === "logs" || status.state === "completed") {
@@ -1011,8 +2142,12 @@ function renderSessionsView(report: DashboardData): void {
   const countEl = document.querySelector<HTMLElement>("[data-session-count]");
   const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
   const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
+  const sourcesToggle = document.querySelector<HTMLElement>("[data-sources-toggle]");
 
   if (!sources || !sessionsEl) return;
+
+  sourcesToggle?.classList.remove("is-hidden");
+  sources.classList.remove("is-hidden");
 
   const totalSessions = report.sessions.length;
   const totalMessages = report.sessions.reduce((sum, session) => sum + session.messageCount, 0);
@@ -1041,8 +2176,7 @@ function renderSessionsView(report: DashboardData): void {
   bindSearch(report);
   bindSyncButton();
   bindSourcesToggle();
-  bindHelpTips();
-  bindTooltips();
+  bindFloatingOverlays();
   bindSettingsPanel();
 
   if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;
@@ -1064,7 +2198,12 @@ function renderCurrentView(): void {
   const app = document.querySelector<HTMLElement>("[data-app-shell]");
   const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
   const searchInput = document.querySelector<HTMLInputElement>("[data-search-input]");
+  const sessionsEl = document.querySelector<HTMLElement>("[data-sessions]");
   const statsEl = document.querySelector<HTMLElement>("[data-stats]");
+  const countEl = document.querySelector<HTMLElement>("[data-session-count]");
+  const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
+  const sourcesToggle = document.querySelector<HTMLElement>("[data-sources-toggle]");
+  const sourcesPanel = document.querySelector<HTMLElement>("[data-sources]");
   const settingsRoot = document.querySelector<HTMLElement>("[data-settings-root]");
   const appSettings = window.distillApi.getAppSettings();
 
@@ -1072,8 +2211,11 @@ function renderCurrentView(): void {
     document.body.dataset.appView = activeView;
   }
 
+  dismissFloatingOverlays();
+
   app?.classList.toggle("logs-mode", activeView === "logs");
-  searchInput?.classList.toggle("is-hidden", activeView === "logs");
+  app?.classList.toggle("db-mode", activeView === "db");
+  searchInput?.classList.toggle("is-hidden", activeView === "logs" || activeView === "db");
 
   for (const btn of document.querySelectorAll<HTMLElement>("[data-view-target]")) {
     btn.classList.toggle("active", btn.dataset.viewTarget === activeView);
@@ -1081,6 +2223,20 @@ function renderCurrentView(): void {
 
   if (activeView === "logs") {
     onboarding?.classList.remove("visible");
+    if (sessionsEl) {
+      sessionsEl.innerHTML = "";
+    }
+    if (countEl) {
+      countEl.textContent = "Logs";
+    }
+    if (scannedEl) {
+      scannedEl.textContent = "";
+    }
+    sourcesToggle?.classList.add("is-hidden");
+    sourcesPanel?.classList.remove("visible");
+    if (sourcesPanel) {
+      sourcesPanel.innerHTML = "";
+    }
     if (statsEl) {
       statsEl.innerHTML = "";
     }
@@ -1090,6 +2246,14 @@ function renderCurrentView(): void {
       refreshLogsData(false);
       renderLogsView(logsPageData ?? { entries: [], counts: { total: 0, errors: 0, running: 0 } });
     }
+  } else if (activeView === "db") {
+    onboarding?.classList.remove("visible");
+    if (statsEl) {
+      statsEl.innerHTML = "";
+    }
+    ensureDbViewData();
+    renderDbSidebar();
+    renderDbWorkspace();
   } else if (dashboardData) {
     renderSessionsView(dashboardData);
   }
@@ -1100,8 +2264,7 @@ function renderCurrentView(): void {
   applySourceColors(appSettings.sourceColors);
   bindSyncButton();
   bindViewSwitch();
-  bindHelpTips();
-  bindTooltips();
+  bindFloatingOverlays();
   bindSettingsPanel();
 }
 

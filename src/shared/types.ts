@@ -160,7 +160,7 @@ export type BackgroundSyncStatus = {
   failedEntries?: ImportFailureEntry[];
 };
 
-export type AppView = "sessions" | "logs";
+export type AppView = "sessions" | "db" | "logs";
 
 export type LogEntryKind = "sync" | "export";
 
@@ -222,9 +222,141 @@ export type AppSettingsSnapshot = {
     distillHome: boolean;
     codexHome: boolean;
     claudeHome: boolean;
+    opencodeDbPath: boolean;
     opencodeConfigDir: boolean;
+    opencodeStateDir: boolean;
   };
   sourceColors: SourceColors;
+};
+
+export type DbTableKind = "table" | "virtual";
+
+export type DbColumnFilterKind = "text" | "numeric" | "date" | "other";
+
+export type DbResultValueKind = "null" | "number" | "text" | "blob";
+
+export type DbFilterOperator =
+  | "contains"
+  | "equals"
+  | "not_equals"
+  | "starts_with"
+  | "ends_with"
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "is_null"
+  | "is_not_null";
+
+export type DbSortDirection = "asc" | "desc";
+
+export type DbTableSummary = {
+  name: string;
+  kind: DbTableKind;
+  isCore: boolean;
+};
+
+export type DbColumnInfo = {
+  name: string;
+  type?: string;
+  filterKind: DbColumnFilterKind;
+  isNullable: boolean;
+  isPrimaryKey: boolean;
+  isHidden: boolean;
+  primaryKeyOrdinal?: number;
+  defaultValue?: string;
+};
+
+export type DbForeignKeyInfo = {
+  id: number;
+  seq: number;
+  table: string;
+  from: string;
+  to?: string;
+  onUpdate: string;
+  onDelete: string;
+  match: string;
+};
+
+export type DbResultColumn = {
+  name: string;
+  sourceColumn?: string;
+  table?: string;
+  database?: string;
+  type?: string;
+};
+
+export type DbCellValue = {
+  kind: DbResultValueKind;
+  preview: string;
+  detail: string;
+  previewTruncated: boolean;
+  detailTruncated: boolean;
+  byteLength?: number;
+};
+
+export type DbResultRow = {
+  key: string;
+  cells: DbCellValue[];
+};
+
+export type DbSort = {
+  column: string;
+  direction: DbSortDirection;
+};
+
+export type DbRowCount = number | bigint;
+
+export type DbFilter = {
+  column: string;
+  operator: DbFilterOperator;
+  value?: string;
+};
+
+export type DbExplorerSnapshot = {
+  databasePath: string;
+  databaseExists: boolean;
+  coreTables: DbTableSummary[];
+  advancedTables: DbTableSummary[];
+  defaultTableName?: string;
+};
+
+export type DbBrowseRequest = {
+  tableName: string;
+  filters: DbFilter[];
+  sort?: DbSort;
+  page: number;
+  pageSize: number;
+};
+
+export type DbBrowseResult = {
+  databasePath: string;
+  table: DbTableSummary;
+  schemaColumns: DbColumnInfo[];
+  foreignKeys: DbForeignKeyInfo[];
+  appliedFilters: DbFilter[];
+  sort: DbSort;
+  page: number;
+  pageSize: number;
+  totalRows: DbRowCount;
+  columns: DbResultColumn[];
+  rows: DbResultRow[];
+};
+
+export type DbQueryRequest = {
+  sql: string;
+};
+
+export type DbQueryResult = {
+  databasePath: string;
+  executedSql: string;
+  durationMs: number;
+  columns: DbResultColumn[];
+  rows: DbResultRow[];
+  rowCount: number;
+  truncated: boolean;
 };
 
 export type SessionListItem = {

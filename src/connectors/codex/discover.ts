@@ -7,7 +7,7 @@ import { DiscoveredCapture } from "../../shared/types";
 function extractSessionId(filePath: string): string | undefined {
   const baseName = path.basename(filePath, ".jsonl");
   const match = baseName.match(/^rollout-\d{4}-\d{2}-\d{2}(?:T\d{2}-\d{2}-\d{2})?-(.+)$/);
-  return match?.[1] ?? (baseName || undefined);
+  return match?.[1];
 }
 
 export function discoverCodexCaptures(): DiscoveredCapture[] {
@@ -37,7 +37,7 @@ export function discoverCodexCaptures(): DiscoveredCapture[] {
 
       return {
         sourceKind: "codex",
-        captureKind: "archived_session",
+        captureKind: "live_session",
         sourcePath: filePath,
         externalSessionId: extractSessionId(filePath),
         sourceModifiedAt: stat.mtime.toISOString(),

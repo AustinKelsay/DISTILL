@@ -69,6 +69,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
 
   const timestampStem = exportedAt.replace(/[:.]/g, "-");
   const outputPath = path.join(exportsDir, `${makeSafeStem(normalizedLabel)}-sessions-${timestampStem}.jsonl`);
+  const tempOutputPath = `${outputPath}.tmp`;
 
   const distillDb = openDistillDatabase();
   try {
@@ -151,40 +152,67 @@ export function exportSessionsByLabel(label: string): ExportReport {
       );
     }
 
-    fs.writeFileSync(outputPath, lines.join("\n") + (lines.length ? "\n" : ""));
+    fs.writeFileSync(tempOutputPath, lines.join("\n") + (lines.length ? "\n" : ""));
 
-    const exportInsert = distillDb.db
-      .prepare(`
-        INSERT INTO exports (export_type, label_filter, output_path, record_count, metadata_json)
-        VALUES ('jsonl', ?, ?, ?, ?)
-      `)
-      .run(
-        normalizedLabel,
-        outputPath,
-        sessionRows.length,
-        JSON.stringify({ exportedAt })
-      );
+    let transactionOpen = false;
 
-    distillDb.db
-      .prepare(`
-        INSERT INTO activity_events (
-          event_type,
-          object_type,
-          object_id,
-          payload_json
-        ) VALUES (?, ?, ?, ?)
-      `)
-      .run(
-        "exported",
-        "export",
-        Number(exportInsert.lastInsertRowid),
-        JSON.stringify({
-          label: normalizedLabel,
+    try {
+      distillDb.db.exec("BEGIN");
+      transactionOpen = true;
+
+      const exportInsert = distillDb.db
+        .prepare(`
+          INSERT INTO exports (export_type, label_filter, output_path, record_count, metadata_json)
+          VALUES ('jsonl', ?, ?, ?, ?)
+        `)
+        .run(
+          normalizedLabel,
           outputPath,
-          recordCount: sessionRows.length,
-          exportedAt
-        })
-      );
+          sessionRows.length,
+          JSON.stringify({ exportedAt })
+        );
+
+      distillDb.db
+        .prepare(`
+          INSERT INTO activity_events (
+            event_type,
+            object_type,
+            object_id,
+            payload_json
+          ) VALUES (?, ?, ?, ?)
+        `)
+        .run(
+          "exported",
+          "export",
+          Number(exportInsert.lastInsertRowid),
+          JSON.stringify({
+            label: normalizedLabel,
+            outputPath,
+            recordCount: sessionRows.length,
+            exportedAt
+          })
+        );
+
+      distillDb.db.exec("COMMIT");
+      transactionOpen = false;
+      fs.renameSync(tempOutputPath, outputPath);
+    } catch (error) {
+      if (transactionOpen) {
+        try {
+          distillDb.db.exec("ROLLBACK");
+        } catch {
+          // Preserve the original export failure below.
+        }
+      }
+
+      try {
+        fs.unlinkSync(tempOutputPath);
+      } catch {
+        // Ignore cleanup failures so the export error remains primary.
+      }
+
+      throw error;
+    }
 
     return {
       exportedAt,

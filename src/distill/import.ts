@@ -111,19 +111,29 @@ function importSourceCaptures(
       snapshot = connector.snapshotCapture(capture);
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
+      const legacyRawSha256 = getTextSha256(
+        `snapshot-failure:${capture.sourcePath}:${capture.sourceModifiedAt ?? ""}:${errorText}`
+      );
       const failedSnapshot = {
-        rawSha256: getTextSha256(`snapshot-failure:${capture.sourcePath}:${capture.sourceModifiedAt ?? ""}:${errorText}`),
+        rawSha256: getTextSha256(JSON.stringify([
+          "snapshot-failure",
+          capture.sourcePath,
+          capture.sourceModifiedAt ?? null,
+          capture.sourceSizeBytes ?? null
+        ])),
         sourceModifiedAt: capture.sourceModifiedAt,
         sourceSizeBytes: capture.sourceSizeBytes
       };
-      const captureId =
-        findCapture(db, sourceId, capture.sourcePath, failedSnapshot.rawSha256)?.id
-        ?? insertCapture(db, sourceId, capture, failedSnapshot);
+      const legacyFailedCapture = findCapture(db, sourceId, capture.sourcePath, legacyRawSha256);
+      const existingFailedCapture =
+        legacyFailedCapture
+        ?? findCapture(db, sourceId, capture.sourcePath, failedSnapshot.rawSha256);
+      const captureId = existingFailedCapture?.id ?? insertCapture(db, sourceId, capture, failedSnapshot);
       updateCaptureFailure(db, captureId, errorText);
       imported.push({
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
-        rawSha256: failedSnapshot.rawSha256,
+        rawSha256: legacyFailedCapture ? legacyRawSha256 : failedSnapshot.rawSha256,
         skipped: false,
         status: "failed",
         errorText
@@ -233,29 +243,64 @@ function importSourceCaptures(
 export function runImport(): ImportReport {
   const distillDb = openDistillDatabase();
   try {
-    const sourcesWithCaptures: Array<{
-      connector: SourceConnector;
-      source: DiscoveredSource;
-      captures: DiscoveredCapture[];
-    }> = sourceConnectors.map((connector) => ({
-      connector,
-      source: connector.detect(),
-      captures: connector.discoverCaptures().sort((a, b) =>
-          (a.sourceModifiedAt ?? "").localeCompare(b.sourceModifiedAt ?? "")
-        )
-    }));
-
     const sourceSummaries: ImportReport["sourceSummaries"] = [];
     const failedEntries: ImportReport["failedEntries"] = [];
     const captures: ImportedCapture[] = [];
 
-    for (const entry of sourcesWithCaptures) {
-      const sourceId = upsertSource(distillDb.db, entry.source);
-      const result = importSourceCaptures(distillDb.db, entry.connector, entry.source, sourceId, entry.captures);
+    for (const connector of sourceConnectors) {
+      let source: DiscoveredSource;
+
+      try {
+        source = connector.detect();
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        console.warn(`[import] Skipping ${connector.kind} detection: ${errorText}`);
+        sourceSummaries.push({
+          kind: connector.kind,
+          discoveredCaptures: 0,
+          importedCaptures: 0,
+          skippedCaptures: 0,
+          failedCaptures: 0
+        });
+        failedEntries.push({
+          sourceKind: connector.kind,
+          sourcePath: connector.kind,
+          errorText
+        });
+        continue;
+      }
+
+      const sourceId = upsertSource(distillDb.db, source);
+
+      let discoveredCaptures: DiscoveredCapture[];
+
+      try {
+        discoveredCaptures = connector.discoverCaptures().sort((a, b) =>
+          (a.sourceModifiedAt ?? "").localeCompare(b.sourceModifiedAt ?? "")
+        );
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        console.warn(`[import] Skipping ${connector.kind} discovery: ${errorText}`);
+        sourceSummaries.push({
+          kind: source.kind,
+          discoveredCaptures: 0,
+          importedCaptures: 0,
+          skippedCaptures: 0,
+          failedCaptures: 0
+        });
+        failedEntries.push({
+          sourceKind: source.kind,
+          sourcePath: source.dataRoot ?? connector.kind,
+          errorText
+        });
+        continue;
+      }
+
+      const result = importSourceCaptures(distillDb.db, connector, source, sourceId, discoveredCaptures);
 
       sourceSummaries.push({
-        kind: entry.source.kind,
-        discoveredCaptures: entry.captures.length,
+        kind: source.kind,
+        discoveredCaptures: discoveredCaptures.length,
         importedCaptures: result.importedCaptures,
         skippedCaptures: result.skippedCaptures,
         failedCaptures: result.failedCaptures

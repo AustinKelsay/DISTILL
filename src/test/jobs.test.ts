@@ -11,7 +11,10 @@ type SavedEnv = Record<
   | "DISTILL_HOME"
   | "CODEX_HOME"
   | "CLAUDE_HOME"
+  | "OPENCODE_DB_PATH"
   | "OPENCODE_CONFIG_DIR"
+  | "OPENCODE_STATE_DIR"
+  | "HOME"
   | "TEST_OPENCODE_DB_PATH"
   | "TEST_OPENCODE_DB_QUERY_JSON"
   | "TEST_OPENCODE_EXPORT_DIR"
@@ -35,17 +38,23 @@ function withTempEnv<T>(fn: (root: string) => T): T {
     DISTILL_HOME: process.env.DISTILL_HOME,
     CODEX_HOME: process.env.CODEX_HOME,
     CLAUDE_HOME: process.env.CLAUDE_HOME,
+    OPENCODE_DB_PATH: process.env.OPENCODE_DB_PATH,
     OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    OPENCODE_STATE_DIR: process.env.OPENCODE_STATE_DIR,
+    HOME: process.env.HOME,
     TEST_OPENCODE_DB_PATH: process.env.TEST_OPENCODE_DB_PATH,
     TEST_OPENCODE_DB_QUERY_JSON: process.env.TEST_OPENCODE_DB_QUERY_JSON,
     TEST_OPENCODE_EXPORT_DIR: process.env.TEST_OPENCODE_EXPORT_DIR,
     PATH: process.env.PATH
   };
 
+  process.env.HOME = tempRoot;
   process.env.DISTILL_HOME = path.join(tempRoot, ".distill");
   process.env.CODEX_HOME = path.join(tempRoot, ".codex");
   process.env.CLAUDE_HOME = path.join(tempRoot, ".claude");
+  process.env.OPENCODE_DB_PATH = path.join(tempRoot, ".local", "share", "opencode", "opencode.db");
   process.env.OPENCODE_CONFIG_DIR = path.join(tempRoot, ".config", "opencode");
+  process.env.OPENCODE_STATE_DIR = path.join(tempRoot, ".local", "state", "opencode");
 
   try {
     return fn(tempRoot);
@@ -118,6 +127,15 @@ function writeFakeOpenCodeExecutable(
     fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
   }
 
+  const safeExecPath = process.execPath
+    .replace(/%/g, "%%")
+    .replace(/\^/g, "^^")
+    .replace(/&/g, "^&")
+    .replace(/\|/g, "^|")
+    .replace(/</g, "^<")
+    .replace(/>/g, "^>")
+    .replace(/"/g, "\"\"");
+
   const scriptPath = path.join(binDir, "opencode");
   const cmdPath = path.join(binDir, "opencode.cmd");
   fs.writeFileSync(
@@ -158,13 +176,14 @@ process.exit(1);
   fs.writeFileSync(
     cmdPath,
     `@echo off
-"${process.execPath.replace(/"/g, "\"\"")}" "%~dp0opencode" %*
+"${safeExecPath}" "%~dp0opencode" %*
 `
   );
   if (process.platform !== "win32") {
     fs.chmodSync(scriptPath, 0o755);
   }
 
+  process.env.OPENCODE_DB_PATH = opencodeDbPath;
   process.env.TEST_OPENCODE_DB_PATH = opencodeDbPath;
   process.env.TEST_OPENCODE_DB_QUERY_JSON = dbQueryPath;
   process.env.TEST_OPENCODE_EXPORT_DIR = exportDir;

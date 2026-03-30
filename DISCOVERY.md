@@ -1,8 +1,8 @@
 # Discovery Pass
 
-Date: 2026-03-26
+Date: 2026-03-30
 
-This discovery pass was run on the current machine to verify whether Distill can start by ingesting local chat history from Codex CLI, Claude Code, and OpenCode.
+This discovery pass was run on the current machine to verify whether Distill can ingest local chat history from Codex CLI, Claude Code, and OpenCode using the capture paths the current implementation now supports.
 
 ## Outcome
 
@@ -14,7 +14,7 @@ All target tools are installed on this machine and already store usable local co
 
 That means the Distill MVP can begin with direct local ingestion and does not need a browser capture path.
 
-This discovery pass is machine-specific and date-specific. The exact file counts below were accurate on 2026-03-25 on this workstation.
+This discovery pass is machine-specific and date-specific. The exact file counts below were accurate on 2026-03-30 on this workstation.
 
 ## Source Locations
 
@@ -22,6 +22,7 @@ This discovery pass is machine-specific and date-specific. The exact file counts
 
 Primary paths observed:
 
+- `~/.codex/sessions/`
 - `~/.codex/archived_sessions/`
 - `~/.codex/session_index.jsonl`
 - `~/.codex/history.jsonl`
@@ -34,10 +35,12 @@ Secondary paths worth preserving as optional metadata:
 
 Observed on this machine:
 
+- `141` live session files in `~/.codex/sessions/`
 - `90` archived session files in `~/.codex/archived_sessions/`
 
 Example files:
 
+- `~/.codex/sessions/2026/03/30/rollout-2026-03-30T07-19-50-019d3eaf-a02b-7b50-a98b-38be0d0127c8.jsonl`
 - `~/.codex/archived_sessions/rollout-2026-03-18T16-39-04-019d02e3-4d05-7c22-ba18-df8c93bfbc55.jsonl`
 - `~/.codex/session_index.jsonl`
 - `~/.codex/history.jsonl`
@@ -60,7 +63,7 @@ Secondary paths worth preserving as optional metadata:
 
 Observed on this machine:
 
-- `71` project session files in `~/.claude/projects/`
+- `109` project session files in `~/.claude/projects/`
 
 Example files:
 
@@ -77,11 +80,11 @@ Primary paths observed:
 
 Observed on this machine:
 
-- `19` sessions in `opencode.db`
-- `150` messages in `opencode.db`
-- `493` parts in `opencode.db`
+- `32` sessions in `opencode.db`
+- `674` messages in `opencode.db`
+- `2393` parts in `opencode.db`
 
-Known part types observed on 2026-03-26:
+Known part types observed on 2026-03-30:
 
 - `text`
 - `reasoning`
@@ -126,7 +129,7 @@ One line per user prompt history entry:
 }
 ```
 
-#### `~/.codex/archived_sessions/*.jsonl`
+#### `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/*.jsonl`
 
 JSONL event stream per session.
 
@@ -289,7 +292,7 @@ Representative shapes:
 ### Session Identity
 
 - primary session ID source: `session_meta.payload.id`
-- fallback session ID source: filename suffix in archived session path
+- fallback session ID source: filename suffix in live or archived session path
 - title source: join with `session_index.jsonl` on session ID when available
 - updated time source: `session_index.updated_at` when available, otherwise max event timestamp
 - started time source: `session_meta.payload.timestamp`
@@ -326,7 +329,7 @@ For Distill, the importer should:
 
 - raw files contain a lot of system/developer bootstrap material
 - assistant reasoning appears encrypted and should not be treated as user-visible text
-- the same user prompt can appear in both `history.jsonl` and archived session records, so dedupe must be explicit
+- the same user prompt can appear in both `history.jsonl` and session JSONL records, so dedupe must be explicit
 
 ## Claude Code Parser Notes
 
@@ -365,13 +368,46 @@ The importer should treat each record as a raw event first, then derive normaliz
 - images may be inlined as base64 and should become artifacts instead of message text
 - some useful metadata exists outside message text, such as `gitBranch`, `entrypoint`, `permissionMode`, and `cwd`
 
+## OpenCode Parser Notes
+
+### Session Identity
+
+- primary session ID source: `info.id`
+- title source: `info.title`, unless it is an auto-generated `New session - ...` placeholder
+- fallback title source: first user text part
+- project path source: `info.directory`
+- started and updated time sources: `info.time.created` and `info.time.updated`
+- CLI version source: `info.version`
+
+### Useful User-Facing Content
+
+Likely keep:
+
+- `messages[].parts[]` with `type = "text"`
+- `messages[].parts[]` with `type = "reasoning"`
+- `messages[].parts[]` with `type = "step-start"` and `type = "step-finish"`
+- `messages[].parts[]` with `type = "tool"` and `type = "file"`
+- `info.role = "system"` messages when they appear in exported session data
+
+Likely promote to artifacts alongside transcript text:
+
+- `tool` parts as tool call and tool result artifacts
+- `file` parts as file artifacts
+- `subtask`, `agent`, `patch`, `snapshot`, `retry`, `compaction`, and other unknown structured parts as `raw_json`
+
+### OpenCode Risks
+
+- the `opencode db ... --format json` output is reliable for discovery, but `opencode export <sessionId>` remains the source of truth for transcript content
+- some exported timestamps can be out of range and should be treated as missing rather than crashing normalization
+- generated session titles are often placeholders and should fall back to the first user message when possible
+
 ## Recommended Parsing Strategy
 
-Use the same high-level pipeline for both sources:
+Use the same high-level pipeline for all three sources:
 
-1. discover files
-2. create one raw `capture` per source file import
-3. hash the raw file contents for idempotency
+1. discover captures
+2. create one raw `capture` per source capture import
+3. hash the raw capture contents for idempotency
 4. parse every line into provider-specific raw records
 5. derive one normalized session
 6. derive normalized messages from user-visible text blocks only
@@ -382,10 +418,13 @@ Use the same high-level pipeline for both sources:
 
 The current codebase aligns with this discovery pass in a few important ways:
 
-- archived session files are treated as the source of truth for Codex imports
+- Codex session JSONL files are treated as the source of truth for Codex imports
+- live Codex session files are preferred when both live and archived copies exist for the same session
 - Claude project JSONL files are treated as the source of truth for Claude imports
+- OpenCode session exports are treated as the source of truth for OpenCode imports
 - auxiliary history files are used only for metadata enrichment, not transcript reconstruction
 - provider noise such as reasoning, progress, and tool traffic is preserved as raw records even when excluded from normalized message text
+- connector failures should be surfaced per source so healthy sources can still import in the same run
 - the importer can safely re-scan these directories because capture dedupe is based on source path plus raw file hash
 
 ## Final Schema Direction

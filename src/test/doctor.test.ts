@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildDoctorReport } from "../distill/doctor";
 import { expandHome } from "../distill/fs";
 import { getOpenCodeDefaultDatabasePath, getOpenCodeStateDir } from "../distill/paths";
+import { getAppSettingsSnapshot } from "../distill/settings";
 
 test("expandHome expands a home-relative path", () => {
   const home = process.env.HOME;
@@ -43,6 +44,21 @@ test("OpenCode path helpers prefer env overrides when present", () => {
       process.env.OPENCODE_STATE_DIR = previousState;
     }
 
+    if (previousDb === undefined) {
+      delete process.env.OPENCODE_DB_PATH;
+    } else {
+      process.env.OPENCODE_DB_PATH = previousDb;
+    }
+  }
+});
+
+test("settings snapshot reports the OpenCode DB env override", () => {
+  const previousDb = process.env.OPENCODE_DB_PATH;
+  process.env.OPENCODE_DB_PATH = "/tmp/opencode.db";
+
+  try {
+    assert.equal(getAppSettingsSnapshot().envOverrides.opencodeDbPath, true);
+  } finally {
     if (previousDb === undefined) {
       delete process.env.OPENCODE_DB_PATH;
     } else {
