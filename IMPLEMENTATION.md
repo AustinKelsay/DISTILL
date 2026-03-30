@@ -8,10 +8,10 @@ Distill should have:
 - one shared normalization pipeline
 - one standardized local data model
 
-The connectors for Codex CLI and Claude Code should only do source-specific work:
+The connectors for Codex CLI, Claude Code, and OpenCode should only do source-specific work:
 
 - detect whether the source exists locally
-- discover relevant files
+- discover relevant captures
 - parse source-specific records
 - map them into Distill's normalized shapes
 
@@ -45,23 +45,29 @@ Implemented now:
 
 - Electron main process
 - preload bridge
-- minimal renderer view
+- renderer views for sessions, DB Explorer, logs, and settings
 - shared TypeScript source model
 - Codex source detection
 - Claude Code source detection
+- OpenCode source detection
 - shared doctor report
 - CLI doctor command
 - SQLite bootstrap from `schema.sql`
-- raw capture discovery for Codex archived sessions
+- raw capture discovery for Codex live and archived sessions
 - raw capture discovery for Claude project sessions
+- virtual capture discovery for OpenCode session exports
 - CLI import command with idempotent capture recording
+- CLI export command
 - raw `capture_records` persistence
 - normalized `sessions` import
 - normalized `messages` import
 - basic artifact extraction for Claude Code image and tool blocks
+- OpenCode artifact extraction for tool, file, and unknown structured parts
 - shared search query over normalized data
 - shared session tags and labels
 - labeled JSONL export
+- persisted source-color preferences in `user_preferences`
+- background sync jobs with operational logs
 - Electron session browser with detail and curation controls
 
 This means the project already has a working source-discovery, raw-capture, and first normalized-ingest spine.
@@ -91,7 +97,7 @@ type DiscoveredSource = {
 
 ### `DiscoveredCapture`
 
-One row per source file that should be imported.
+One row per source capture that should be imported.
 
 ```ts
 type DiscoveredCapture = {
@@ -237,6 +243,8 @@ This should be the same for every source:
 12. emit `activity_events`
 13. enqueue `jobs` for indexing and auto-tagging
 
+Operationally, detection and discovery should fail per source rather than failing the whole import run. The importer should surface those failures in the report and logs while allowing healthy connectors to continue.
+
 ## Dedupe Rules
 
 ### Capture-Level Dedupe
@@ -244,7 +252,7 @@ This should be the same for every source:
 Capture dedupe should use:
 
 - source kind
-- source file path
+- source capture path
 - raw SHA-256
 
 If those match, the capture is already known.
@@ -279,12 +287,14 @@ The Codex connector should verify:
 
 - `codex` is on `PATH`
 - `~/.codex` exists
+- `~/.codex/sessions` exists when live sessions are available
 - `~/.codex/archived_sessions` exists
 
 ## Capture Discovery
 
 Initial capture set:
 
+- every file in `~/.codex/sessions/**/*.jsonl`
 - every file in `~/.codex/archived_sessions/*.jsonl`
 
 Optional auxiliary metadata sources:
@@ -294,7 +304,9 @@ Optional auxiliary metadata sources:
 
 ## Parsing Rules
 
-Use archived session files as the source of truth.
+Use Codex session JSONL files as the source of truth.
+
+When both live and archived copies exist for the same session, prefer the live session capture.
 
 Join in `session_index.jsonl` only for:
 
@@ -396,12 +408,13 @@ Keep visible in the normalized transcript:
 - `step-finish`
 - `tool`
 - `file`
+- `system` role messages when present
 
 Promote structured payloads to artifacts for:
 
 - `tool`
 - `file`
-- unknown future non-text parts
+- subtask, agent, patch, snapshot, retry, compaction, and unknown future non-text parts
 
 ## Claude Artifacts
 
@@ -426,6 +439,8 @@ The storage layer should expose a small set of operations:
 - `replaceSessionArtifacts`
 - `appendActivityEvent`
 - `enqueueJob`
+- `getUserPreference`
+- `setUserPreference`
 
 The current implementation already follows most of this split in `src/distill/db.ts`. Connectors still stay out of SQLite entirely, and the import pipeline remains the only place that coordinates database writes.
 
@@ -437,12 +452,18 @@ The current repository is organized like this:
 src/
   distill/
     db.ts
+    db_inspector.ts
     doctor.ts
+    export.ts
     fs.ts
     import.ts
+    jobs.ts
     jsonl.ts
+    logs.ts
     paths.ts
+    preferences.ts
     query.ts
+    settings.ts
   connectors/
     codex/
       detect.ts
@@ -452,10 +473,18 @@ src/
       detect.ts
       discover.ts
       parse.ts
+    opencode/
+      common.ts
+      detect.ts
+      discover.ts
+      parse.ts
+      snapshot.ts
   cli/
     doctor.ts
+    export.ts
     import.ts
   electron/
+    preload.ts
   renderer/
   shared/
   test/
@@ -473,8 +502,9 @@ Shows:
 
 - whether Codex CLI is installed
 - whether Claude Code is installed
+- whether OpenCode is installed
 - whether local data roots exist
-- how many candidate capture files were found
+- how many candidate captures were found
 
 ### `distill import`
 
@@ -524,6 +554,7 @@ Build:
 - FTS indexing
 - search and richer query layer
 - export of labeled sessions
+- operational logs and DB inspection
 
 ## Open Decisions
 
@@ -543,5 +574,5 @@ So the next actual coding step is:
 
 1. enrich artifact handling and metadata extraction
 2. add lightweight search filters for source/model/label
-3. grow the Electron UI beyond session list/detail into richer curation flows
-4. introduce background jobs where synchronous import becomes too heavy
+3. grow curation and review workflows beyond the current session/detail/logs surfaces
+4. push more expensive indexing and enrichment work behind the existing job pipeline

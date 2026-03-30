@@ -58,7 +58,7 @@ let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 let syncStatusUnsubscribe: (() => void) | null = null;
 let isSettingsOpen = false;
-let tooltipPositionsBound = false;
+let floatingOverlaysBound = false;
 let activeView: AppView = "sessions";
 let logsSearchQuery = "";
 let activeLogsFilter: "all" | "sync" | "export" | "errors" = "all";
@@ -85,6 +85,9 @@ let dbSelectedRowKey: string | null = null;
 let dbSnapshotRequestToken = 0;
 let dbBrowseRequestToken = 0;
 let dbQueryRequestToken = 0;
+let tooltipShowTimeout: ReturnType<typeof setTimeout> | null = null;
+let activeTooltipAnchor: HTMLElement | null = null;
+let activeHelpTipAnchor: HTMLElement | null = null;
 
 const DB_QUERY_PLACEHOLDER = `SELECT id, title, updated_at\nFROM sessions\nORDER BY updated_at DESC\nLIMIT 25;`;
 
@@ -145,7 +148,7 @@ function renderHelpTip(text: string, title?: string, label = "?"): string {
 
 function tooltipAttrs(text: string): string {
   const safe = escapeHtml(text);
-  return `data-tooltip="${safe}" title="${safe}"`;
+  return `data-tooltip="${safe}"`;
 }
 
 function titleAttr(text: string): string {
@@ -377,11 +380,11 @@ function renderLogsView(data: LogsPageData): void {
     `;
 
   root.innerHTML = `
-    <div class="logs-view">
+    <div class="logs-view fade-in">
       <div class="logs-header">
         <div>
           <div class="detail-title">Logs</div>
-          <div class="logs-subtitle">Operational sync and export history that normally only shows up in the shell.</div>
+          <div class="logs-subtitle">Operational sync and export history that normally only shows up in the shell. ${renderHelpTip("Each card shows a sync or export operation with timing, metrics, and any errors. Expand a card to see per-source breakdowns and raw JSON.", "Logs")}</div>
         </div>
         <div class="logs-summary">
           <span class="log-summary-chip">${data.counts.total} entries</span>
@@ -396,6 +399,7 @@ function renderLogsView(data: LogsPageData): void {
           <button class="chip ${activeLogsFilter === "sync" ? "active" : ""}" type="button" data-logs-filter="sync">Sync</button>
           <button class="chip ${activeLogsFilter === "export" ? "active" : ""}" type="button" data-logs-filter="export">Exports</button>
           <button class="chip ${activeLogsFilter === "errors" ? "active" : ""}" type="button" data-logs-filter="errors">Errors</button>
+          ${renderHelpTip("Filter by operation type. Sync logs cover background imports from local source files. Export logs cover JSONL generation triggered from Sessions.", "Log Filters")}
         </div>
       </div>
       <div class="logs-list">
@@ -405,6 +409,21 @@ function renderLogsView(data: LogsPageData): void {
   `;
 
   bindLogsControls();
+}
+
+function renderLogsListOnly(data: LogsPageData): void {
+  const listEl = document.querySelector<HTMLElement>(".logs-list");
+  if (!listEl) {
+    renderLogsView(data);
+    return;
+  }
+
+  const entries = filteredLogEntries(data);
+  const emptyHtml = data.entries.length === 0
+    ? `<div class="detail-empty"><div class="empty-state"><div class="empty-title">No logs yet</div><div class="empty-copy">Sync and export activity will show up here once Distill has operational history to surface.</div></div></div>`
+    : `<div class="detail-empty"><div class="empty-state"><div class="empty-title">No matching logs</div><div class="empty-copy">Adjust the log search or filters to widen the current result set.</div></div></div>`;
+
+  listEl.innerHTML = `<div class="fade-in">${entries.length ? entries.map(renderLogEntry).join("") : emptyHtml}</div>`;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -548,6 +567,34 @@ function renderDbTableItem(table: DbTableSummary): string {
   `;
 }
 
+function renderDbSkeletonWorkspace(): string {
+  const schemaChips = Array.from({length: 6}, () =>
+    `<div class="skeleton-block" style="flex:0 0 auto;width:120px;height:58px;border-radius:10px"></div>`
+  ).join("");
+
+  const gridRows = Array.from({length: 8}, () =>
+    `<div class="skeleton-row" style="margin-bottom:4px"></div>`
+  ).join("");
+
+  return `
+    <div class="db-view fade-in" style="padding:20px 24px 48px">
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px">
+        <div class="skeleton-line" style="width:180px;height:18px"></div>
+        <div class="skeleton-line" style="width:320px;height:12px"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:20px">
+        <div class="skeleton-line" style="width:64px;height:30px;border-radius:6px"></div>
+        <div class="skeleton-line" style="width:56px;height:30px;border-radius:6px"></div>
+      </div>
+      <div style="margin-bottom:20px">
+        <div class="skeleton-line" style="width:60px;height:12px;margin-bottom:12px"></div>
+        <div style="display:flex;gap:10px;overflow:hidden">${schemaChips}</div>
+      </div>
+      <div>${gridRows}</div>
+    </div>
+  `;
+}
+
 function renderDbSidebar(): void {
   const sessionsEl = document.querySelector<HTMLElement>("[data-sessions]");
   const countEl = document.querySelector<HTMLElement>("[data-session-count]");
@@ -563,7 +610,7 @@ function renderDbSidebar(): void {
 
   onboarding?.classList.remove("visible");
   sourcesToggle?.classList.add("is-hidden");
-  sourcesPanel?.classList.add("is-hidden");
+  sourcesPanel?.classList.remove("visible");
   if (sourcesPanel) {
     sourcesPanel.innerHTML = "";
   }
@@ -580,7 +627,12 @@ function renderDbSidebar(): void {
   }
 
   if (dbExplorerLoading && !dbExplorerSnapshot) {
-    sessionsEl.innerHTML = `<div class="db-sidebar-message">Loading database schema…</div>`;
+    sessionsEl.innerHTML = `
+      <div class="fade-in" style="padding:12px 16px;display:flex;flex-direction:column;gap:6px">
+        <div class="skeleton-line" style="width:100px;height:12px;margin-bottom:4px"></div>
+        ${Array.from({length: 5}, () => `<div class="skeleton-block" style="height:42px"></div>`).join("")}
+      </div>
+    `;
     return;
   }
 
@@ -613,15 +665,18 @@ function renderDbSidebar(): void {
     : "";
 
   sessionsEl.innerHTML = `
+    <div class="fade-in">
     <div class="db-sidebar-controls">
       <label class="db-toggle">
         <input type="checkbox" data-db-show-internal ${dbShowInternalTables ? "checked" : ""} />
         <span>Show internal tables</span>
+        ${renderHelpTip("Internal tables are used by Distill for indexing, FTS, and metadata. They are safe to inspect but not typically needed for day-to-day browsing.", "Internal Tables")}
       </label>
       <div class="db-sidebar-copy">Read-only browser over ${escapeHtml(dbExplorerSnapshot.databasePath)}</div>
     </div>
     ${coreMarkup}
     ${advancedMarkup}
+    </div>
   `;
 }
 
@@ -691,7 +746,7 @@ function renderDbRowInspector(columns: DbResultColumn[], row: DbResultRow): stri
 
   return `
     <section class="db-row-inspector">
-      <div class="db-section-title">Row Inspector</div>
+      <div class="db-section-title">Row Inspector ${renderHelpTip("Click any row in the table above to see all of its column values here. Long text and blob values are shown in full.", "Row Inspector")}</div>
       <div class="db-field-grid">
         ${fields}
       </div>
@@ -751,7 +806,24 @@ function renderDbResultGrid(
 
 function renderDbBrowseTab(): string {
   if (dbBrowseLoading && !dbBrowseResult) {
-    return renderDbEmptyState("Loading table", "Fetching schema and rows for the selected table.");
+    const skeletonRows = Array.from({length: 6}, () =>
+      `<div class="skeleton-row" style="margin-bottom:4px"></div>`
+    ).join("");
+    return `
+      <section class="db-panel fade-in">
+        <div class="db-toolbar-row" style="pointer-events:none;opacity:0.5">
+          <div class="db-toolbar-group">
+            <div class="skeleton-line" style="width:60px;height:12px;margin-bottom:12px"></div>
+            <div class="skeleton-line" style="width:100%;height:34px;border-radius:8px"></div>
+          </div>
+          <div class="db-toolbar-group">
+            <div class="skeleton-line" style="width:40px;height:12px;margin-bottom:12px"></div>
+            <div class="skeleton-line" style="width:100%;height:34px;border-radius:8px"></div>
+          </div>
+        </div>
+        <div style="padding:0 16px 16px">${skeletonRows}</div>
+      </section>
+    `;
   }
 
   if (dbBrowseError) {
@@ -778,11 +850,11 @@ function renderDbBrowseTab(): string {
     <section class="db-panel">
       <div class="db-toolbar-row">
         <div class="db-toolbar-group">
-          <div class="db-section-title">Filters</div>
+          <div class="db-section-title">Filters ${renderHelpTip("Add column filters to narrow the visible rows. Choose a column, an operator, and a value. Click Apply to execute.", "Filters")}</div>
           ${filterRows}
           <div class="db-filter-actions">
             <button class="btn-ghost" type="button" data-db-add-filter ${columns.length ? "" : "disabled"}>+ Filter</button>
-            <button class="btn btn-secondary" type="button" data-db-apply-browse ${dbBrowseLoading ? "disabled" : ""}>Apply</button>
+            <button class="btn-primary" type="button" data-db-apply-browse ${dbBrowseLoading ? "disabled" : ""}>${dbBrowseLoading ? '<span class="spinner spinner--small"></span> Applying\u2026' : "Apply"}</button>
             <button class="btn-ghost" type="button" data-db-reset-browse>Reset</button>
           </div>
         </div>
@@ -796,6 +868,10 @@ function renderDbBrowseTab(): string {
               <option value="asc" ${sort.direction === "asc" ? "selected" : ""}>asc</option>
               <option value="desc" ${sort.direction === "desc" ? "selected" : ""}>desc</option>
             </select>
+          </div>
+          <div class="db-sort-divider"></div>
+          <div class="db-section-title">Per Page</div>
+          <div class="db-sort-row">
             <select class="db-select" data-db-page-size>
               <option value="25" ${dbBrowsePageSize === 25 ? "selected" : ""}>25 rows</option>
               <option value="50" ${dbBrowsePageSize === 50 ? "selected" : ""}>50 rows</option>
@@ -822,7 +898,7 @@ function renderDbBrowseTab(): string {
 function renderDbQueryTab(): string {
   const queryResultMarkup =
     dbQueryRunning && !dbQueryResult
-      ? renderDbEmptyState("Running query", "Executing the current read-only statement.")
+      ? `<div class="detail-empty"><div class="empty-state"><div class="spinner" style="margin-bottom:16px"></div><div class="empty-copy">Executing query\u2026</div></div></div>`
       : dbQueryError
         ? renderDbEmptyState("Query failed", dbQueryError)
         : dbQueryResult
@@ -839,8 +915,8 @@ function renderDbQueryTab(): string {
     <section class="db-panel">
       <div class="db-query-shell">
         <div class="db-query-header">
-          <div class="db-section-title">Custom SQL</div>
-          <div class="db-query-copy">Single statement. Read-only only.</div>
+          <div class="db-section-title">Custom SQL ${renderHelpTip("Write and run a single read-only SQL statement against the Distill database. Results are limited to 100 rows. Use Ctrl/Cmd+Enter as a shortcut.", "Custom SQL")}</div>
+          <div class="db-query-copy">Single read-only statement.</div>
         </div>
         <textarea
           class="db-query-editor"
@@ -848,7 +924,7 @@ function renderDbQueryTab(): string {
           placeholder="${escapeHtml(DB_QUERY_PLACEHOLDER)}"
         >${escapeHtml(dbQueryText)}</textarea>
         <div class="db-query-actions">
-          <button class="btn btn-secondary" type="button" data-db-run-query ${dbQueryRunning ? "disabled" : ""}>Run Query</button>
+          <button class="btn-primary" type="button" data-db-run-query ${dbQueryRunning ? "disabled" : ""}>${dbQueryRunning ? '<span class="spinner spinner--small"></span> Running\u2026' : "Run Query"}</button>
           <span class="db-query-hint">Use Ctrl/Cmd + Enter to run the current query.</span>
         </div>
         ${dbQueryIsStale ? `<div class="db-inline-notice">Results may be stale after sync. Rerun the query.</div>` : ""}
@@ -863,7 +939,7 @@ function renderDbWorkspace(): void {
   if (!root) return;
 
   if (dbExplorerLoading && !dbExplorerSnapshot) {
-    root.innerHTML = renderDbEmptyState("Loading database", "Opening the read-only SQLite inspector.");
+    root.innerHTML = renderDbSkeletonWorkspace();
     return;
   }
 
@@ -898,9 +974,9 @@ function renderDbWorkspace(): void {
     : `<div class="db-schema-empty">Schema will appear once the selected table finishes loading.</div>`;
 
   root.innerHTML = `
-    <div class="db-view">
+    <div class="db-view fade-in">
       <div class="detail-toolbar">
-        <span class="detail-title">DB Explorer</span>
+        <span class="detail-title">DB Explorer ${renderHelpTip("A read-only browser over the Distill SQLite database. Inspect tables, filter rows, view schema, and run custom SQL queries. No data is modified.", "DB Explorer")}</span>
         <div class="detail-meta-secondary">
           <span class="badge ${table?.kind === "virtual" ? "badge-db-virtual" : "badge-db-table"}">${escapeHtml(table?.kind ?? "table")}</span>
           <span>${escapeHtml(dbSelectedTableName)}</span>
@@ -914,7 +990,7 @@ function renderDbWorkspace(): void {
         <button class="chip ${dbActiveTab === "query" ? "active" : ""}" type="button" data-db-tab="query">Query</button>
       </div>
       <section class="db-schema-section">
-        <div class="db-section-title">Schema</div>
+        <div class="db-section-title db-section-title--prominent">Schema ${renderHelpTip("Each chip shows a column in the selected table with its SQLite type, primary-key status, and nullability. Hidden columns are excluded from the browse grid.", "Schema")}</div>
         <div class="db-schema-strip">
           ${schemaStrip}
         </div>
@@ -1475,9 +1551,11 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
   const root = document.querySelector<HTMLElement>("[data-session-detail]");
   if (!root) return;
 
+  root.scrollTop = 0;
+
   if (!detail) {
     root.innerHTML = `
-      <div class="detail-empty">
+      <div class="detail-empty fade-in">
         <div class="empty-state">
           <div class="empty-title">Select a session</div>
           <div class="empty-copy">Choose a conversation from the left to inspect the transcript, labels, tags, and artifacts.</div>
@@ -1527,10 +1605,11 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     : "";
 
   root.innerHTML = `
+    <div class="fade-in">
     <div class="detail-toolbar">
       <span class="detail-title">${escapeHtml(detail.title)}</span>
       <div class="dropdown" data-export-dropdown>
-        <button class="btn btn-secondary" data-export-toggle>\u2913 Export</button>
+        <button class="btn btn-secondary" data-export-toggle ${tooltipAttrs("Export labeled sessions (train, holdout, or favorite) as JSONL files.")}>\u2913 Export</button>
         <div class="dropdown-menu" data-export-menu>
           <button class="dropdown-item" data-export-label="train">Export training set</button>
           <button class="dropdown-item" data-export-label="holdout">Export holdout set</button>
@@ -1563,6 +1642,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     </div>
     ${artifacts}
     <div class="message-list">${messages}</div>
+    </div>
   `;
 
   bindDetailCuration(detail.id);
@@ -1627,9 +1707,10 @@ function renderSessionList(items: Array<SessionListItem | SearchResult>): void {
   if (!container) return;
 
   const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
-  container.innerHTML = query
+  const listHtml = query
     ? (items as SearchResult[]).map(renderSearchItem).join("")
     : (items as SessionListItem[]).map(renderSessionItem).join("");
+  container.innerHTML = `<div class="fade-in">${listHtml}</div>`;
 
   bindSessionClicks();
 }
@@ -1691,13 +1772,16 @@ function bindExportDropdown(): void {
 function bindSyncButton(): void {
   const syncBtn = document.querySelector<HTMLElement>("[data-sync-now]");
   if (syncBtn) {
+    const originalLabel = syncBtn.innerHTML;
     syncBtn.onclick = async () => {
       syncBtn.setAttribute("disabled", "true");
+      syncBtn.innerHTML = '<span class="spinner spinner--small"></span> Syncing\u2026';
       try {
         const status = await window.distillApi.requestBackgroundSync();
         renderSyncStatus(status);
       } finally {
         syncBtn.removeAttribute("disabled");
+        syncBtn.innerHTML = originalLabel;
       }
     };
   }
@@ -1748,104 +1832,121 @@ function positionFloating(floatEl: HTMLElement, anchorRect: DOMRect, preferAbove
   floatEl.style.top = `${top}px`;
 }
 
-function bindTooltips(): void {
-  if (tooltipPositionsBound) return;
+function tooltipFloatEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-tooltip-float]");
+}
 
-  const maybeFloat = document.querySelector<HTMLElement>("[data-tooltip-float]");
-  if (!maybeFloat) return;
-  const floatEl: HTMLElement = maybeFloat;
+function helpPopoverEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-help-popover]");
+}
 
-  let showTimeout: ReturnType<typeof setTimeout> | null = null;
-  let activeEl: HTMLElement | null = null;
+function clearTooltipShowTimeout(): void {
+  if (!tooltipShowTimeout) return;
+  clearTimeout(tooltipShowTimeout);
+  tooltipShowTimeout = null;
+}
 
-  function show(el: HTMLElement): void {
-    const text = el.dataset.tooltip;
-    if (!text) return;
-    activeEl = el;
-    floatEl.textContent = text;
-    floatEl.classList.add("visible");
-    positionFloating(floatEl, el.getBoundingClientRect(), true);
-  }
+function hideFloatingElement(el: HTMLElement | null): void {
+  if (!el) return;
+  el.classList.remove("visible");
+}
 
-  function hide(): void {
-    if (showTimeout) { clearTimeout(showTimeout); showTimeout = null; }
-    floatEl.classList.remove("visible");
-    activeEl = null;
-  }
+function dismissTooltip(): void {
+  clearTooltipShowTimeout();
+  hideFloatingElement(tooltipFloatEl());
+  activeTooltipAnchor = null;
+}
+
+function dismissHelpPopover(): void {
+  hideFloatingElement(helpPopoverEl());
+  activeHelpTipAnchor = null;
+}
+
+function dismissFloatingOverlays(): void {
+  dismissTooltip();
+  dismissHelpPopover();
+}
+
+function showFloatingElement(
+  el: HTMLElement | null,
+  anchor: HTMLElement,
+  render: (surface: HTMLElement) => void
+): void {
+  if (!el || !anchor.isConnected) return;
+  render(el);
+  el.classList.add("visible");
+  positionFloating(el, anchor.getBoundingClientRect(), true);
+}
+
+function bindFloatingOverlays(): void {
+  if (floatingOverlaysBound) return;
 
   document.addEventListener("mouseenter", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const el = target.closest<HTMLElement>("[data-tooltip]");
-    if (!el) return;
-    hide();
-    showTimeout = setTimeout(() => show(el), 250);
+    const anchor = target.closest<HTMLElement>("[data-tooltip]");
+    if (!anchor) return;
+
+    dismissTooltip();
+    tooltipShowTimeout = setTimeout(() => {
+      const text = anchor.dataset.tooltip;
+      if (!text || !anchor.isConnected) return;
+      activeTooltipAnchor = anchor;
+      showFloatingElement(tooltipFloatEl(), anchor, (surface) => {
+        surface.textContent = text;
+      });
+    }, 180);
   }, true);
 
   document.addEventListener("mouseleave", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const el = target.closest<HTMLElement>("[data-tooltip]");
-    if (el && el === activeEl) hide();
+    const anchor = target.closest<HTMLElement>("[data-tooltip]");
+    if (!anchor) return;
+    if (activeTooltipAnchor === anchor) {
+      dismissTooltip();
+      return;
+    }
+    clearTooltipShowTimeout();
   }, true);
 
-  document.addEventListener("scroll", hide, true);
-  tooltipPositionsBound = true;
-}
-
-let helpTipsBound = false;
-
-function bindHelpTips(): void {
-  if (helpTipsBound) return;
-
-  const maybePopover = document.querySelector<HTMLElement>("[data-help-popover]");
-  if (!maybePopover) return;
-  const popoverEl: HTMLElement = maybePopover;
-
-  let activeHelpTip: HTMLElement | null = null;
-
-  function dismissPopover(): void {
-    popoverEl.classList.remove("visible");
-    activeHelpTip = null;
-  }
-
-  // Event delegation: handles any [data-help-tip] click, including dynamically rendered ones
-  document.addEventListener("click", (e) => {
-    const target = e.target;
+  document.addEventListener("click", (event) => {
+    const target = event.target;
     if (!(target instanceof Element)) return;
 
     const tip = target.closest<HTMLElement>("[data-help-tip]");
     if (tip) {
-      e.stopPropagation();
+      event.stopPropagation();
+      dismissTooltip();
       const text = tip.dataset.helpTip;
       if (!text) return;
 
-      // Toggle if clicking the same tip
-      if (activeHelpTip === tip) {
-        dismissPopover();
+      if (activeHelpTipAnchor === tip) {
+        dismissHelpPopover();
         return;
       }
 
-      activeHelpTip = tip;
-      const popoverTitle = tip.dataset.helpTitle || "Help";
-      popoverEl.innerHTML = `<div class="help-popover-title">${escapeHtml(popoverTitle)}</div><div>${escapeHtml(text)}</div>`;
-      popoverEl.classList.add("visible");
-      positionFloating(popoverEl, tip.getBoundingClientRect(), true);
+      activeHelpTipAnchor = tip;
+      showFloatingElement(helpPopoverEl(), tip, (surface) => {
+        const popoverTitle = tip.dataset.helpTitle || "Help";
+        surface.innerHTML = `<div class="help-popover-title">${escapeHtml(popoverTitle)}</div><div>${escapeHtml(text)}</div>`;
+      });
       return;
     }
 
-    // Click-away dismissal
-    if (!activeHelpTip) return;
-    if (popoverEl.contains(target)) return;
-    dismissPopover();
+    const popover = helpPopoverEl();
+    if (popover && popover.contains(target)) return;
+    dismissHelpPopover();
   });
 
-  // Dismiss on scroll
-  document.addEventListener("scroll", () => {
-    if (activeHelpTip) dismissPopover();
-  }, true);
+  document.addEventListener("scroll", dismissFloatingOverlays, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") dismissFloatingOverlays();
+  });
+  window.addEventListener("resize", dismissFloatingOverlays);
+  window.addEventListener("blur", dismissFloatingOverlays);
 
-  helpTipsBound = true;
+  floatingOverlaysBound = true;
 }
 
 function bindSourceColorPickers(): void {
@@ -1935,7 +2036,7 @@ function bindLogsControls(): void {
     input.oninput = () => {
       logsSearchQuery = input.value;
       if (logsPageData) {
-        renderLogsView(logsPageData);
+        renderLogsListOnly(logsPageData);
       }
     };
   }
@@ -1945,8 +2046,11 @@ function bindLogsControls(): void {
       const filter = btn.dataset.logsFilter;
       if (filter !== "all" && filter !== "sync" && filter !== "export" && filter !== "errors") return;
       activeLogsFilter = filter;
+      for (const other of document.querySelectorAll<HTMLElement>("[data-logs-filter]")) {
+        other.classList.toggle("active", other.dataset.logsFilter === filter);
+      }
       if (logsPageData) {
-        renderLogsView(logsPageData);
+        renderLogsListOnly(logsPageData);
       }
     };
   }
@@ -2017,8 +2121,7 @@ function renderSessionsView(report: DashboardData): void {
   bindSearch(report);
   bindSyncButton();
   bindSourcesToggle();
-  bindHelpTips();
-  bindTooltips();
+  bindFloatingOverlays();
   bindSettingsPanel();
 
   if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;
@@ -2040,13 +2143,20 @@ function renderCurrentView(): void {
   const app = document.querySelector<HTMLElement>("[data-app-shell]");
   const onboarding = document.querySelector<HTMLElement>("[data-onboarding]");
   const searchInput = document.querySelector<HTMLInputElement>("[data-search-input]");
+  const sessionsEl = document.querySelector<HTMLElement>("[data-sessions]");
   const statsEl = document.querySelector<HTMLElement>("[data-stats]");
+  const countEl = document.querySelector<HTMLElement>("[data-session-count]");
+  const scannedEl = document.querySelector<HTMLElement>("[data-scanned-at]");
+  const sourcesToggle = document.querySelector<HTMLElement>("[data-sources-toggle]");
+  const sourcesPanel = document.querySelector<HTMLElement>("[data-sources]");
   const settingsRoot = document.querySelector<HTMLElement>("[data-settings-root]");
   const appSettings = window.distillApi.getAppSettings();
 
   if (document.body) {
     document.body.dataset.appView = activeView;
   }
+
+  dismissFloatingOverlays();
 
   app?.classList.toggle("logs-mode", activeView === "logs");
   app?.classList.toggle("db-mode", activeView === "db");
@@ -2058,6 +2168,20 @@ function renderCurrentView(): void {
 
   if (activeView === "logs") {
     onboarding?.classList.remove("visible");
+    if (sessionsEl) {
+      sessionsEl.innerHTML = "";
+    }
+    if (countEl) {
+      countEl.textContent = "Logs";
+    }
+    if (scannedEl) {
+      scannedEl.textContent = "";
+    }
+    sourcesToggle?.classList.add("is-hidden");
+    sourcesPanel?.classList.remove("visible");
+    if (sourcesPanel) {
+      sourcesPanel.innerHTML = "";
+    }
     if (statsEl) {
       statsEl.innerHTML = "";
     }
@@ -2085,8 +2209,7 @@ function renderCurrentView(): void {
   applySourceColors(appSettings.sourceColors);
   bindSyncButton();
   bindViewSwitch();
-  bindHelpTips();
-  bindTooltips();
+  bindFloatingOverlays();
   bindSettingsPanel();
 }
 

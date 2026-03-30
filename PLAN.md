@@ -10,7 +10,7 @@ Distill should start ruthlessly simple and local-first:
 - one SQLite database
 - one blobs folder
 - one local discovery and ingest flow
-- one timeline UI
+- one local app surface with sessions, logs, and inspection tools
 
 The core loop is:
 
@@ -64,10 +64,11 @@ The split is simple:
 
 ## Initial Sources
 
-V1 should only support local chat data from:
+V1 should support local chat data from:
 
 - OpenAI Codex CLI
 - Claude Code
+- OpenCode
 
 That means the first ingest path is not browser capture. It is local filesystem discovery.
 
@@ -80,7 +81,7 @@ Distill should:
 
 The product assumption is simple:
 
-the user has already used Codex CLI and/or Claude Code, and the useful history is already on disk.
+the user has already used Codex CLI, Claude Code, and/or OpenCode, and the useful history is already on disk.
 
 ## Data Model
 
@@ -124,6 +125,8 @@ Every meaningful action should emit an event, such as:
 - `deduped`
 - `exported`
 
+The current app also exposes that activity through a dedicated Logs view, so sync and export behavior should stay inspectable without falling back to shell output.
+
 ### Jobs Layer
 
 `jobs` powers background work:
@@ -132,8 +135,17 @@ Every meaningful action should emit an event, such as:
 - auto-tagging
 - future enrichment
 - exports
+- local source sync
 
 This gives automation without overbuilding event sourcing or distributed workers.
+
+### Preferences Layer
+
+`user_preferences` stores lightweight UI state that should persist locally without becoming part of normalized chat data.
+
+Current examples:
+
+- source color choices used in the Electron app
 
 ## Initial Schema
 
@@ -183,8 +195,17 @@ jobs(
   run_after, created_at, updated_at
 )
 
+exports(
+  id, export_type, label_filter, output_path, record_count,
+  metadata_json, created_at
+)
+
 activity_events(
   id, event_type, object_type, object_id, payload_json, created_at
+)
+
+user_preferences(
+  key, value, updated_at
 )
 ```
 
@@ -194,7 +215,7 @@ Do not begin with OAuth, provider APIs, or browser extensions.
 
 Start with three local ingest paths:
 
-1. Direct local source discovery for Codex CLI and Claude Code
+1. Direct local source discovery for Codex CLI, Claude Code, and OpenCode
 2. Watched import folder
 3. Tiny local capture API for future local tools and scripts
 
@@ -202,7 +223,7 @@ The first and most important path is direct discovery of local session files.
 
 Distill should be able to:
 
-1. check whether Codex CLI and Claude Code appear to exist on the machine
+1. check whether Codex CLI, Claude Code, and OpenCode appear to exist on the machine
 2. look in known local storage locations
 3. verify chat/session files are present
 4. parse those local artifacts
@@ -423,7 +444,7 @@ Avoid these in MVP:
 ## Best Build Order
 
 1. Local DB, schema, and blob storage
-2. Source discovery for Codex CLI and Claude Code
+2. Source discovery for Codex CLI, Claude Code, and OpenCode
 3. Parsers for their local session formats
 4. Direct local ingest pipeline
 5. Manual import folder
@@ -438,7 +459,7 @@ Avoid these in MVP:
 
 Distill MVP is done when it can:
 
-- detect Codex CLI and Claude Code on the local machine
+- detect Codex CLI, Claude Code, and OpenCode on the local machine
 - find their local chat/session history when present
 - preserve raw captures
 - normalize sessions and messages into SQLite
@@ -452,21 +473,21 @@ Distill MVP is done when it can:
 
 The next high-leverage deliverables after the current ingest spine are:
 
-- search over normalized data using the existing FTS table
-- manual curation flows for tags and labels
-- first JSONL export path for labeled sessions
-- richer artifact and raw-capture inspection in the UI
+- richer search filters and review workflows on top of the existing FTS table
+- more capable curation flows for tags and labels
+- deeper artifact and raw-capture inspection in the UI
+- incremental automation on top of the current sync and job pipeline
 
 ## Current Foundation
 
 Already in place:
 
 - Electron + TypeScript scaffold
-- local source doctor for Codex CLI and Claude Code
-- direct import pipeline for Codex and Claude local session files
+- local source doctor for Codex CLI, Claude Code, and OpenCode
+- direct import pipeline for Codex, Claude, and OpenCode local session files
 - normalized `sessions`, `messages`, and `artifacts` persistence
-- recent-session dashboard query and session detail UI
-- test coverage for doctor, parse, import, and query flows
+- recent-session dashboard query, session detail UI, DB Explorer, logs, and settings surfaces
+- test coverage for doctor, parse, import, query, export, jobs, logs, and preferences flows
 - discovery notes from this machine
 - SQLite schema
 - implementation blueprint

@@ -29,15 +29,16 @@ Implemented now:
 - CLI `export` command
 - idempotent raw capture recording keyed by source path and SHA-256
 - normalized `sessions`, `messages`, and `artifacts` import
-- parser coverage for Codex archived sessions, Claude project sessions, and OpenCode session exports
+- parser coverage for Codex live and archived sessions, Claude project sessions, and OpenCode session exports
 - basic dashboard query for recent sessions
 - interactive search UI over normalized FTS results
 - session detail query and transcript read model
 - manual session tags and labels
 - labeled JSONL export
-- minimal Electron UI showing source health, recent sessions, search, session detail, curation controls, artifact inspection, sync status, and export actions
+- Electron UI showing source health, recent sessions, search, session detail, curation controls, artifact inspection, DB Explorer, logs, sync status, export actions, and a settings panel for source-color preferences
 - startup and interval-based background sync jobs for local source refresh
-- tests for doctor, parsing, import, query, and export behavior
+- persisted UI source-color preferences in `user_preferences`
+- tests for doctor, parsing, import, query, export, logs, jobs, and preferences behavior
 
 Not implemented yet:
 
@@ -61,14 +62,17 @@ Path overrides:
 - `DISTILL_HOME`: override the Distill working directory
 - `CODEX_HOME`: override the Codex data root
 - `CLAUDE_HOME`: override the Claude Code data root
+- `OPENCODE_DB_PATH`: override the default OpenCode SQLite path fallback
 - `OPENCODE_CONFIG_DIR`: override the OpenCode config directory
+- `OPENCODE_STATE_DIR`: override the OpenCode state directory
 
 ## Supported Sources
 
 Codex CLI:
 
 - detects the `codex` executable on `PATH`
-- reads archived sessions from `~/.codex/archived_sessions`
+- prefers live sessions from `~/.codex/sessions`
+- also imports archived sessions from `~/.codex/archived_sessions`
 - uses `session_index.jsonl` and `history.jsonl` as auxiliary metadata only
 
 Claude Code:
@@ -83,14 +87,18 @@ OpenCode:
 - discovers sessions through `opencode db ... --format json`
 - parses `opencode export <sessionId>` JSON as the transcript source of truth
 - preserves text, reasoning, tool, step, and file trace data in the normalized transcript
+- keeps system-role messages when they appear in exported session data
 
 All connectors preserve raw records and derive user-facing transcript messages from provider-specific local capture formats.
 
 Operational notes:
 
 - `npm run export` defaults to the `train` label if no label is provided.
+- Export metadata and activity logging are recorded atomically after the JSONL file is written.
 - Search tolerates punctuation-heavy input such as quoted text and dashed tokens.
 - The Electron renderer escapes transcript and metadata text before injecting it into the UI.
+- Background sync runs on launch and every two minutes while the app is open.
+- Import failures are isolated per source: a broken connector still surfaces an error in reports and logs without blocking healthy sources.
 
 ## Commands
 
@@ -151,7 +159,7 @@ npm start
 The current importer:
 
 1. detects local sources
-2. discovers candidate captures
+2. discovers candidate captures per source
 3. snapshots and hashes each raw capture
 4. skips captures already imported with the same `(source, path, sha256)`
 5. parses raw records
@@ -161,6 +169,8 @@ The current importer:
 9. exports labeled sessions as JSONL
 
 That means re-running `npm run import` is expected and safe. New or changed files import again; previously normalized identical captures are skipped.
+
+If one connector fails during detection or discovery, Distill records that failure and keeps importing the other healthy sources. Snapshot failures are also recorded deterministically so repeated failures update the same failed capture row instead of creating duplicates.
 
 ## Project Documents
 

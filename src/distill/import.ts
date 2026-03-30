@@ -112,7 +112,12 @@ function importSourceCaptures(
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
       const failedSnapshot = {
-        rawSha256: getTextSha256(`snapshot-failure:${capture.sourcePath}:${capture.sourceModifiedAt ?? ""}:${errorText}`),
+        rawSha256: getTextSha256(JSON.stringify([
+          "snapshot-failure",
+          capture.sourcePath,
+          capture.sourceModifiedAt ?? null,
+          capture.sourceSizeBytes ?? null
+        ])),
         sourceModifiedAt: capture.sourceModifiedAt,
         sourceSizeBytes: capture.sourceSizeBytes
       };
@@ -233,29 +238,64 @@ function importSourceCaptures(
 export function runImport(): ImportReport {
   const distillDb = openDistillDatabase();
   try {
-    const sourcesWithCaptures: Array<{
-      connector: SourceConnector;
-      source: DiscoveredSource;
-      captures: DiscoveredCapture[];
-    }> = sourceConnectors.map((connector) => ({
-      connector,
-      source: connector.detect(),
-      captures: connector.discoverCaptures().sort((a, b) =>
-          (a.sourceModifiedAt ?? "").localeCompare(b.sourceModifiedAt ?? "")
-        )
-    }));
-
     const sourceSummaries: ImportReport["sourceSummaries"] = [];
     const failedEntries: ImportReport["failedEntries"] = [];
     const captures: ImportedCapture[] = [];
 
-    for (const entry of sourcesWithCaptures) {
-      const sourceId = upsertSource(distillDb.db, entry.source);
-      const result = importSourceCaptures(distillDb.db, entry.connector, entry.source, sourceId, entry.captures);
+    for (const connector of sourceConnectors) {
+      let source: DiscoveredSource;
+
+      try {
+        source = connector.detect();
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        console.warn(`[import] Skipping ${connector.kind} detection: ${errorText}`);
+        sourceSummaries.push({
+          kind: connector.kind,
+          discoveredCaptures: 0,
+          importedCaptures: 0,
+          skippedCaptures: 0,
+          failedCaptures: 0
+        });
+        failedEntries.push({
+          sourceKind: connector.kind,
+          sourcePath: connector.kind,
+          errorText
+        });
+        continue;
+      }
+
+      const sourceId = upsertSource(distillDb.db, source);
+
+      let discoveredCaptures: DiscoveredCapture[];
+
+      try {
+        discoveredCaptures = connector.discoverCaptures().sort((a, b) =>
+          (a.sourceModifiedAt ?? "").localeCompare(b.sourceModifiedAt ?? "")
+        );
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        console.warn(`[import] Skipping ${connector.kind} discovery: ${errorText}`);
+        sourceSummaries.push({
+          kind: source.kind,
+          discoveredCaptures: 0,
+          importedCaptures: 0,
+          skippedCaptures: 0,
+          failedCaptures: 0
+        });
+        failedEntries.push({
+          sourceKind: source.kind,
+          sourcePath: source.dataRoot ?? connector.kind,
+          errorText
+        });
+        continue;
+      }
+
+      const result = importSourceCaptures(distillDb.db, connector, source, sourceId, discoveredCaptures);
 
       sourceSummaries.push({
-        kind: entry.source.kind,
-        discoveredCaptures: entry.captures.length,
+        kind: source.kind,
+        discoveredCaptures: discoveredCaptures.length,
         importedCaptures: result.importedCaptures,
         skippedCaptures: result.skippedCaptures,
         failedCaptures: result.failedCaptures

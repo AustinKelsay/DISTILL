@@ -179,7 +179,7 @@ function normalizePartRole(part: OpenCodePart, messageRole: string): NormalizedM
     return "tool";
   }
 
-  if (messageRole === "user" || messageRole === "assistant") {
+  if (messageRole === "user" || messageRole === "assistant" || messageRole === "system") {
     return messageRole;
   }
 

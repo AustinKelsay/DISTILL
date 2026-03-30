@@ -223,6 +223,7 @@ export type AppSettingsSnapshot = {
     codexHome: boolean;
     claudeHome: boolean;
     opencodeConfigDir: boolean;
+    opencodeStateDir: boolean;
   };
   sourceColors: SourceColors;
 };

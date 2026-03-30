@@ -4,14 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { sourceConnectors } from "../connectors";
+import { SourceConnector } from "../connectors/types";
 import { runImport } from "../distill/import";
 import { ensureDirectory } from "../distill/fs";
+import { DiscoveredCapture } from "../shared/types";
 
 type SavedEnv = Record<
   | "DISTILL_HOME"
   | "CODEX_HOME"
   | "CLAUDE_HOME"
+  | "OPENCODE_DB_PATH"
   | "OPENCODE_CONFIG_DIR"
+  | "OPENCODE_STATE_DIR"
+  | "HOME"
   | "TEST_OPENCODE_DB_PATH"
   | "TEST_OPENCODE_DB_QUERY_JSON"
   | "TEST_OPENCODE_EXPORT_DIR"
@@ -35,17 +41,23 @@ function withTempEnv<T>(fn: (root: string) => T): T {
     DISTILL_HOME: process.env.DISTILL_HOME,
     CODEX_HOME: process.env.CODEX_HOME,
     CLAUDE_HOME: process.env.CLAUDE_HOME,
+    OPENCODE_DB_PATH: process.env.OPENCODE_DB_PATH,
     OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+    OPENCODE_STATE_DIR: process.env.OPENCODE_STATE_DIR,
+    HOME: process.env.HOME,
     TEST_OPENCODE_DB_PATH: process.env.TEST_OPENCODE_DB_PATH,
     TEST_OPENCODE_DB_QUERY_JSON: process.env.TEST_OPENCODE_DB_QUERY_JSON,
     TEST_OPENCODE_EXPORT_DIR: process.env.TEST_OPENCODE_EXPORT_DIR,
     PATH: process.env.PATH
   };
 
+  process.env.HOME = tempRoot;
   process.env.DISTILL_HOME = path.join(tempRoot, ".distill");
   process.env.CODEX_HOME = path.join(tempRoot, ".codex");
   process.env.CLAUDE_HOME = path.join(tempRoot, ".claude");
+  process.env.OPENCODE_DB_PATH = path.join(tempRoot, ".local", "share", "opencode", "opencode.db");
   process.env.OPENCODE_CONFIG_DIR = path.join(tempRoot, ".config", "opencode");
+  process.env.OPENCODE_STATE_DIR = path.join(tempRoot, ".local", "state", "opencode");
 
   try {
     return fn(tempRoot);
@@ -118,6 +130,15 @@ function writeFakeOpenCodeExecutable(
     fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
   }
 
+  const safeExecPath = process.execPath
+    .replace(/%/g, "%%")
+    .replace(/\^/g, "^^")
+    .replace(/&/g, "^&")
+    .replace(/\|/g, "^|")
+    .replace(/</g, "^<")
+    .replace(/>/g, "^>")
+    .replace(/"/g, "\"\"");
+
   const scriptPath = path.join(binDir, "opencode");
   const cmdPath = path.join(binDir, "opencode.cmd");
   fs.writeFileSync(
@@ -158,13 +179,14 @@ process.exit(1);
   fs.writeFileSync(
     cmdPath,
     `@echo off
-"${process.execPath.replace(/"/g, "\"\"")}" "%~dp0opencode" %*
+"${safeExecPath}" "%~dp0opencode" %*
 `
   );
   if (process.platform !== "win32") {
     fs.chmodSync(scriptPath, 0o755);
   }
 
+  process.env.OPENCODE_DB_PATH = opencodeDbPath;
   process.env.TEST_OPENCODE_DB_PATH = opencodeDbPath;
   process.env.TEST_OPENCODE_DB_QUERY_JSON = dbQueryPath;
   process.env.TEST_OPENCODE_EXPORT_DIR = exportDir;
@@ -563,14 +585,80 @@ test("runImport rolls back partial normalization writes when session replacement
   });
 });
 
-test("runImport surfaces OpenCode discovery failures instead of silently treating them as empty", () => {
+test("runImport keeps other connectors importing when OpenCode discovery fails", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
     writeFakeOpenCodeExecutable(root, "{not json", {});
 
-    assert.throws(
-      () => runImport(),
+    const report = runImport();
+    const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
+    const codexSummary = report.sourceSummaries.find((summary) => summary.kind === "codex");
+    const claudeSummary = report.sourceSummaries.find((summary) => summary.kind === "claude_code");
+
+    assert.equal(codexSummary?.importedCaptures, 1);
+    assert.equal(claudeSummary?.importedCaptures, 1);
+    assert.equal(opencodeSummary?.discoveredCaptures, 0);
+    assert.equal(opencodeSummary?.importedCaptures, 0);
+    assert.equal(opencodeSummary?.failedCaptures, 0);
+    assert.equal(report.captures.length, 2);
+    assert.match(
+      report.failedEntries.find((entry) => entry.sourceKind === "opencode")?.errorText ?? "",
       /OpenCode session discovery failed: OpenCode command returned invalid JSON/
     );
+  });
+});
+
+test("runImport reuses the same failed capture row when snapshotting the same capture fails again", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const failingCapture: DiscoveredCapture = {
+      sourceKind: "opencode",
+      captureKind: "session_export",
+      sourcePath: "opencode://session/snapshot-failure",
+      externalSessionId: "snapshot-failure",
+      sourceModifiedAt: "2026-03-30T08:10:00.000Z",
+      sourceSizeBytes: 42,
+      metadata: {}
+    };
+
+    const connectorIndex = sourceConnectors.findIndex((connector) => connector.kind === "opencode");
+    assert.notEqual(connectorIndex, -1);
+
+    const originalConnector = sourceConnectors[connectorIndex] as SourceConnector;
+    let attempt = 0;
+    sourceConnectors[connectorIndex] = {
+      ...originalConnector,
+      discoverCaptures: () => [failingCapture],
+      snapshotCapture: () => {
+        attempt += 1;
+        throw new Error(`snapshot exploded ${attempt}`);
+      }
+    };
+
+    try {
+      const first = runImport();
+      const second = runImport();
+      const db = new DatabaseSync(first.databasePath);
+      const rows = db
+        .prepare(`
+          SELECT c.raw_sha256, c.status, c.error_text
+          FROM captures c
+          JOIN sources s ON s.id = c.source_id
+          WHERE s.kind = 'opencode' AND c.source_path = ?
+        `)
+        .all(failingCapture.sourcePath) as Array<{ raw_sha256: string; status: string; error_text: string | null }>;
+      const secondFailure = second.captures.find((capture) => capture.sourcePath === failingCapture.sourcePath);
+
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.status, "failed");
+      assert.match(rows[0]?.error_text ?? "", /snapshot exploded 2/);
+      assert.equal(secondFailure?.status, "failed");
+      assert.match(secondFailure?.errorText ?? "", /snapshot exploded 2/);
+
+      db.close();
+    } finally {
+      sourceConnectors[connectorIndex] = originalConnector;
+    }
   });
 });
