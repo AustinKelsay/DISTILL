@@ -9,8 +9,8 @@ This discovery pass was run on the current machine to verify whether Distill can
 All target tools are installed on this machine and already store usable local conversation history locally.
 
 - `codex` binary found at `/opt/homebrew/bin/codex`
-- `claude` binary found at `/Users/plebdev/.local/bin/claude`
-- `opencode` binary found at `/Users/plebdev/.opencode/bin/opencode`
+- `claude` binary found at `$HOME/.local/bin/claude`
+- `opencode` binary found at `$HOME/.opencode/bin/opencode`
 
 That means the Distill MVP can begin with direct local ingestion and does not need a browser capture path.
 
@@ -396,4 +396,4 @@ The schema should support three layers:
 - normalized sessions and messages
 - activity and curation
 
-The concrete draft is in [schema.sql](/Users/plebdev/Desktop/code/DISTILL/schema.sql).
+The concrete draft is in [schema.sql](schema.sql).

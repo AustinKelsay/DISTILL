@@ -7,9 +7,31 @@ import test from "node:test";
 import { runImport } from "../distill/import";
 import { ensureDirectory } from "../distill/fs";
 
+type SavedEnv = Record<
+  | "DISTILL_HOME"
+  | "CODEX_HOME"
+  | "CLAUDE_HOME"
+  | "OPENCODE_CONFIG_DIR"
+  | "TEST_OPENCODE_DB_PATH"
+  | "TEST_OPENCODE_DB_QUERY_JSON"
+  | "TEST_OPENCODE_EXPORT_DIR"
+  | "PATH",
+  string | undefined
+>;
+
+function restoreEnv(saved: SavedEnv): void {
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
 function withTempEnv<T>(fn: (root: string) => T): T {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "distill-test-"));
-  const previous = {
+  const previous: SavedEnv = {
     DISTILL_HOME: process.env.DISTILL_HOME,
     CODEX_HOME: process.env.CODEX_HOME,
     CLAUDE_HOME: process.env.CLAUDE_HOME,
@@ -28,14 +50,7 @@ function withTempEnv<T>(fn: (root: string) => T): T {
   try {
     return fn(tempRoot);
   } finally {
-    process.env.DISTILL_HOME = previous.DISTILL_HOME;
-    process.env.CODEX_HOME = previous.CODEX_HOME;
-    process.env.CLAUDE_HOME = previous.CLAUDE_HOME;
-    process.env.OPENCODE_CONFIG_DIR = previous.OPENCODE_CONFIG_DIR;
-    process.env.TEST_OPENCODE_DB_PATH = previous.TEST_OPENCODE_DB_PATH;
-    process.env.TEST_OPENCODE_DB_QUERY_JSON = previous.TEST_OPENCODE_DB_QUERY_JSON;
-    process.env.TEST_OPENCODE_EXPORT_DIR = previous.TEST_OPENCODE_EXPORT_DIR;
-    process.env.PATH = previous.PATH;
+    restoreEnv(previous);
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
@@ -84,7 +99,7 @@ function writeFixtureFiles(root: string): void {
 
 function writeFakeOpenCodeExecutable(
   root: string,
-  sessions: Array<Record<string, unknown>>,
+  sessions: Array<Record<string, unknown>> | string,
   exportsBySession: Record<string, string>
 ): void {
   const binDir = path.join(root, ".bin");
@@ -97,7 +112,7 @@ function writeFakeOpenCodeExecutable(
   ensureDirectory(exportDir);
 
   fs.writeFileSync(opencodeDbPath, "");
-  fs.writeFileSync(dbQueryPath, JSON.stringify(sessions, null, 2));
+  fs.writeFileSync(dbQueryPath, typeof sessions === "string" ? sessions : JSON.stringify(sessions, null, 2));
 
   for (const [sessionId, output] of Object.entries(exportsBySession)) {
     fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
@@ -431,5 +446,17 @@ test("runImport rolls back partial normalization writes when session replacement
     assert.match(failedReport?.errorText ?? "", /unique|constraint/i);
 
     db.close();
+  });
+});
+
+test("runImport surfaces OpenCode discovery failures instead of silently treating them as empty", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+    writeFakeOpenCodeExecutable(root, "{not json", {});
+
+    assert.throws(
+      () => runImport(),
+      /OpenCode session discovery failed: OpenCode command returned invalid JSON/
+    );
   });
 });

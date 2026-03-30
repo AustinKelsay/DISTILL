@@ -30,9 +30,9 @@ export function getOpenCodeConfigDir(): string {
 }
 
 export function getOpenCodeStateDir(): string {
-  return path.join(getHomeDirectory(), ".local", "state", "opencode");
+  return process.env.OPENCODE_STATE_DIR ?? path.join(getHomeDirectory(), ".local", "state", "opencode");
 }
 
 export function getOpenCodeDefaultDatabasePath(): string {
-  return path.join(getHomeDirectory(), ".local", "share", "opencode", "opencode.db");
+  return process.env.OPENCODE_DB_PATH ?? path.join(getHomeDirectory(), ".local", "share", "opencode", "opencode.db");
 }

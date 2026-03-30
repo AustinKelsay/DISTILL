@@ -34,16 +34,30 @@ export type DiscoveredCapture = {
   metadata: Record<string, unknown>;
 };
 
-export type ImportedCaptureStatus = "imported" | "failed" | "skipped";
-
-export type ImportedCapture = {
+type ImportedCaptureBase = {
   sourcePath: string;
   externalSessionId?: string;
   rawSha256: string;
-  skipped: boolean;
-  status: ImportedCaptureStatus;
-  errorText?: string;
 };
+
+export type ImportedCapture =
+  | (ImportedCaptureBase & {
+    status: "imported";
+    skipped?: false;
+    errorText?: undefined;
+  })
+  | (ImportedCaptureBase & {
+    status: "failed";
+    skipped?: false;
+    errorText: string;
+  })
+  | (ImportedCaptureBase & {
+    status: "skipped";
+    skipped: true;
+    errorText?: undefined;
+  });
+
+export type ImportedCaptureStatus = ImportedCapture["status"];
 
 export type ParsedCaptureRecord = {
   lineNo: number;

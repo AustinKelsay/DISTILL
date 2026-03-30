@@ -158,7 +158,8 @@
         position: relative;
       }
 
-      [data-tooltip]:hover::after {
+      [data-tooltip]:hover::after,
+      [data-tooltip]:focus-visible::after {
         content: attr(data-tooltip);
         position: absolute;
         left: 50%;
