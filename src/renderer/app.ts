@@ -808,7 +808,7 @@ function renderDbResultGrid(
       tabindex="0"
     >
       ${row.cells.map((cell) => `
-        <td class="db-cell-${cell.kind}" ${titleAttr(cell.detail)}>
+        <td class="db-cell-${cell.kind}" ${titleAttr(cell.preview)}>
           ${escapeHtml(cell.preview)}
         </td>
       `).join("")}
@@ -1074,9 +1074,6 @@ async function loadDbExplorerSnapshot(): Promise<void> {
     }
   }
 
-  if (token === dbSnapshotRequestToken && dbSelectedTableName) {
-    await loadDbBrowseResult();
-  }
 }
 
 async function loadDbBrowseResult(): Promise<void> {
@@ -1140,6 +1137,7 @@ async function executeDbQuery(): Promise<void> {
   dbQueryRunning = true;
   dbQueryError = null;
   dbQueryResult = null;
+  dbQueryIsStale = false;
   dbSelectedRowKey = null;
 
   if (activeView === "db") {
