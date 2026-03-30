@@ -158,7 +158,8 @@
         position: relative;
       }
 
-      [data-tooltip]:hover::after {
+      [data-tooltip]:hover::after,
+      [data-tooltip]:focus-visible::after {
         content: attr(data-tooltip);
         position: absolute;
         left: 50%;
@@ -180,6 +181,12 @@
         pointer-events: none;
         z-index: 200;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+      }
+
+      [data-tooltip][data-tooltip-below]:hover::after,
+      [data-tooltip][data-tooltip-below]:focus-visible::after {
+        top: calc(100% + 8px);
+        bottom: auto;
       }
 
       /* ── Onboarding banner (hidden by default, shown via JS) ── */
@@ -593,6 +600,12 @@
         color: var(--muted);
       }
 
+      .msg-meta {
+        background: rgba(58, 58, 62, 0.22);
+        border-left-color: rgba(154, 149, 144, 0.7);
+        color: var(--ink);
+      }
+
       .msg-header {
         display: flex;
         gap: 10px;
@@ -605,6 +618,13 @@
       }
 
       .msg-header .role { font-weight: 700; }
+
+      .msg-header .kind {
+        border: 1px solid rgba(58, 58, 62, 0.75);
+        border-radius: 999px;
+        padding: 1px 6px;
+        color: var(--muted);
+      }
 
       /* ── Sources footer (collapsed) ── */
       .sources-toggle {

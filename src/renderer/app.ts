@@ -36,6 +36,7 @@ let activeSessionId: number | null = null;
 let exportTimeout: ReturnType<typeof setTimeout> | null = null;
 let syncStatusUnsubscribe: (() => void) | null = null;
 let isSettingsOpen = false;
+let tooltipPositionsBound = false;
 
 /* Helpers */
 
@@ -78,6 +79,18 @@ function renderHelpTip(text: string, label = "?"): string {
 function tooltipAttrs(text: string): string {
   const safe = escapeHtml(text);
   return `data-tooltip="${safe}" title="${safe}"`;
+}
+
+function sourceLabel(sourceKind: SessionListItem["sourceKind"] | SearchResult["sourceKind"] | SessionDetail["sourceKind"]): string {
+  if (sourceKind === "claude_code") {
+    return "claude";
+  }
+
+  if (sourceKind === "opencode") {
+    return "opencode";
+  }
+
+  return "codex";
 }
 
 function renderSyncStatus(status: BackgroundSyncStatus): void {
@@ -129,7 +142,7 @@ function renderSessionItem(session: SessionListItem): string {
     <div class="session-item" data-session-id="${session.id}" ${tooltipAttrs(metaTooltip)}>
       <div class="session-item-title">${escapeHtml(session.title)}</div>
       <div class="session-item-meta">
-        <span class="badge badge-source">${session.sourceKind === "claude_code" ? "claude" : "codex"}</span>
+        <span class="badge badge-source">${sourceLabel(session.sourceKind)}</span>
         ${session.model ? `<span class="badge badge-model">${escapeHtml(session.model)}</span>` : ""}
         <span>${session.messageCount} msgs</span>
         <span>${timeAgo(session.updatedAt)}</span>
@@ -145,7 +158,7 @@ function renderSearchItem(result: SearchResult): string {
     <div class="session-item" data-session-id="${result.sessionId}" ${tooltipAttrs(`Search hit from ${result.sourceKind}. Click to open the full session transcript.`)}>
       <div class="session-item-title">${escapeHtml(result.title)}</div>
       <div class="session-item-meta">
-        <span class="badge badge-source">${result.sourceKind === "claude_code" ? "claude" : "codex"}</span>
+        <span class="badge badge-source">${sourceLabel(result.sourceKind)}</span>
         <span>${timeAgo(result.updatedAt)}</span>
       </div>
       <div class="session-item-preview">${escapeHtml(result.snippet)}</div>
@@ -199,10 +212,13 @@ function renderSettingsPanel(settings: AppSettingsSnapshot): string {
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Sources ${renderHelpTip("Distill currently reads from local Codex CLI and Claude Code histories. These paths are where it expects to find those source files.")}</div>
+          <div class="settings-section-title">Sources ${renderHelpTip("Distill currently reads from local Codex CLI, Claude Code, and OpenCode histories. These paths are where it expects to find those source files and databases.")}</div>
           ${sources}
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Codex archived sessions and history files.")}><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Claude Code project session files and history.")}><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("SQLite database path used to discover OpenCode sessions.")}><span>OpenCode DB</span><span class="settings-note">${escapeHtml(settings.opencodeDatabasePath)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("OpenCode config directory used for runtime configuration.")}><span>OpenCode config</span><span class="settings-note">${escapeHtml(settings.opencodeConfigDir)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("OpenCode state directory used for prompt history and related local state.")}><span>OpenCode state</span><span class="settings-note">${escapeHtml(settings.opencodeStateDir)}</span></div>
         </div>
 
         <div class="settings-section">
@@ -253,11 +269,13 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
 
   const messages = detail.messages.map((msg) => {
     const roleClass = msg.role === "user" ? "msg-user"
-      : msg.role === "assistant" ? "msg-assistant" : "msg-system";
+      : msg.role === "assistant" ? "msg-assistant"
+      : msg.role === "tool" ? "msg-tool" : "msg-system";
     return `
-      <div class="msg ${roleClass}">
+      <div class="msg ${roleClass} ${msg.messageKind === "meta" ? "msg-meta" : ""}">
         <div class="msg-header">
           <span class="role">${escapeHtml(msg.role)}</span>
+          <span class="kind">${escapeHtml(msg.messageKind)}</span>
           <span>#${msg.ordinal}</span>
           <span>${timeAgo(msg.createdAt)}</span>
         </div>
@@ -279,7 +297,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     <div class="detail-toolbar">
       <span class="detail-title">${escapeHtml(detail.title)}</span>
       <div class="detail-meta-inline">
-        <span>${detail.sourceKind === "claude_code" ? "claude" : "codex"}</span>
+        <span>${sourceLabel(detail.sourceKind)}</span>
         ${detail.model ? `<span>${escapeHtml(detail.model)}</span>` : ""}
         <span>${detail.messageCount} msgs</span>
         <span>${detail.artifactCount} artifacts ${renderHelpTip("Artifacts are non-message payloads such as images, tool calls, and tool results extracted from the raw capture.")}</span>
@@ -436,6 +454,35 @@ function bindHelpTips(): void {
   }
 }
 
+function bindTooltipPositions(): void {
+  if (tooltipPositionsBound) {
+    return;
+  }
+
+  const updatePlacement = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const el = target.closest<HTMLElement>("[data-tooltip]");
+    if (!el) {
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    if (rect.top < 72) {
+      el.setAttribute("data-tooltip-below", "true");
+    } else {
+      el.removeAttribute("data-tooltip-below");
+    }
+  };
+
+  document.addEventListener("mouseenter", updatePlacement, true);
+  document.addEventListener("focusin", updatePlacement);
+  tooltipPositionsBound = true;
+}
+
 function bindSettingsPanel(): void {
   const openBtn = document.querySelector<HTMLElement>("[data-settings-open]");
   const closeBtn = document.querySelector<HTMLElement>("[data-settings-close]");
@@ -526,6 +573,7 @@ function renderReport(report: DashboardData): void {
   bindExportActions();
   bindSourcesToggle();
   bindHelpTips();
+  bindTooltipPositions();
   bindSettingsPanel();
 
   if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;

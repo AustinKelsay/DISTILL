@@ -24,3 +24,15 @@ export function getCodexHome(): string {
 export function getClaudeHome(): string {
   return process.env.CLAUDE_HOME ?? path.join(getHomeDirectory(), ".claude");
 }
+
+export function getOpenCodeConfigDir(): string {
+  return process.env.OPENCODE_CONFIG_DIR ?? path.join(getHomeDirectory(), ".config", "opencode");
+}
+
+export function getOpenCodeStateDir(): string {
+  return process.env.OPENCODE_STATE_DIR ?? path.join(getHomeDirectory(), ".local", "state", "opencode");
+}
+
+export function getOpenCodeDefaultDatabasePath(): string {
+  return process.env.OPENCODE_DB_PATH ?? path.join(getHomeDirectory(), ".local", "share", "opencode", "opencode.db");
+}

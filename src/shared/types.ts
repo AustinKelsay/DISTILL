@@ -1,4 +1,4 @@
-export type SourceKind = "codex" | "claude_code";
+export type SourceKind = "codex" | "claude_code" | "opencode";
 
 export type InstallStatus = "installed" | "not_found" | "partial";
 
@@ -34,12 +34,30 @@ export type DiscoveredCapture = {
   metadata: Record<string, unknown>;
 };
 
-export type ImportedCapture = {
+type ImportedCaptureBase = {
   sourcePath: string;
   externalSessionId?: string;
   rawSha256: string;
-  skipped: boolean;
 };
+
+export type ImportedCapture =
+  | (ImportedCaptureBase & {
+    status: "imported";
+    skipped?: false;
+    errorText?: undefined;
+  })
+  | (ImportedCaptureBase & {
+    status: "failed";
+    skipped?: false;
+    errorText: string;
+  })
+  | (ImportedCaptureBase & {
+    status: "skipped";
+    skipped: true;
+    errorText?: undefined;
+  });
+
+export type ImportedCaptureStatus = ImportedCapture["status"];
 
 export type ParsedCaptureRecord = {
   lineNo: number;
@@ -133,6 +151,9 @@ export type AppSettingsSnapshot = {
   databasePath: string;
   codexHome: string;
   claudeHome: string;
+  opencodeDatabasePath: string;
+  opencodeConfigDir: string;
+  opencodeStateDir: string;
   sourceKinds: SourceKind[];
   defaultLabels: string[];
   backgroundSyncIntervalMinutes: number;
@@ -140,6 +161,7 @@ export type AppSettingsSnapshot = {
     distillHome: boolean;
     codexHome: boolean;
     claudeHome: boolean;
+    opencodeConfigDir: boolean;
   };
 };
 
@@ -189,6 +211,7 @@ export type SessionDetailMessage = {
   role: string;
   text: string;
   createdAt?: string;
+  messageKind: "text" | "meta";
 };
 
 export type SessionArtifact = {
