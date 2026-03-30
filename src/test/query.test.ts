@@ -59,6 +59,43 @@ test("query layer derives a fallback title from normalized messages", () => {
   });
 });
 
+test("query layer ignores meta messages when deriving session previews", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (2, 'opencode', 'OpenCode', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (11, 2, 'session-meta', NULL, '/tmp/demo', '2026-03-25T12:10:00Z', 3, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (11, 1, 'user', 'Plan the connector.', 'u1', '2026-03-25T12:10:00Z', 'text', '{}'),
+      (11, 2, 'assistant', 'Need to inspect the repo first.', 'a1', '2026-03-25T12:10:01Z', 'meta', '{}'),
+      (11, 3, 'assistant', 'I will inspect the repo first.', 'a2', '2026-03-25T12:10:02Z', 'text', '{}')
+    `).run();
+
+    const sessions = listRecentSessions();
+    const detail = getSessionDetail(11);
+
+    assert.equal(sessions[0]?.title, "Plan the connector.");
+    assert.equal(sessions[0]?.preview, "I will inspect the repo first.");
+    assert.equal(detail?.messages[1]?.messageKind, "meta");
+
+    distillDb.close();
+  });
+});
+
 test("query layer searches normalized sessions through FTS", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
@@ -211,6 +248,43 @@ test("query layer returns artifact summaries for session detail", () => {
     assert.equal(detail?.artifacts[0]?.summary, "Tool call: Read");
     assert.match(detail?.artifacts[0]?.payloadJson ?? "", /file_path/);
     assert.equal(detail?.artifacts[0]?.messageOrdinal, 1);
+
+    distillDb.close();
+  });
+});
+
+test("query layer prefers tool_result errors over partial output previews", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (3, 'opencode', 'OpenCode', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (41, 3, 'session-tool-error', 'Tool error session', '/tmp/demo', '2026-03-25T15:10:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO artifacts (
+        session_id, kind, metadata_json, created_at
+      ) VALUES
+      (41, 'tool_result', ?, '2026-03-25T15:10:01Z')
+    `).run(JSON.stringify({
+      name: "Read",
+      output: "partial stdout",
+      error: "permission denied"
+    }));
+
+    const detail = getSessionDetail(41);
+
+    assert.equal(detail?.artifacts[0]?.summary, "Tool result: permission denied");
+    assert.equal(detail?.artifacts[0]?.payloadPreview, "permission denied");
 
     distillDb.close();
   });

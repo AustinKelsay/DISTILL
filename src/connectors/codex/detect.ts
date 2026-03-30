@@ -6,37 +6,54 @@ export function detectCodexSource(): DiscoveredSource {
   const executablePath = findExecutable("codex");
   const dataRoot = getCodexHome();
   const archivedSessions = `${dataRoot}/archived_sessions`;
+  const liveSessions = `${dataRoot}/sessions`;
   const sessionIndex = `${dataRoot}/session_index.jsonl`;
   const history = `${dataRoot}/history.jsonl`;
 
+  const dataRootCheck: SourcePathCheck = {
+    label: "data_root",
+    path: dataRoot,
+    exists: pathExists(dataRoot)
+  };
+  const archivedSessionsCheck: SourcePathCheck = {
+    label: "archived_sessions",
+    path: archivedSessions,
+    exists: pathExists(archivedSessions),
+    fileCount: countFilesMatching(archivedSessions, (filePath) => filePath.endsWith(".jsonl"))
+  };
+  const liveSessionsCheck: SourcePathCheck = {
+    label: "sessions",
+    path: liveSessions,
+    exists: pathExists(liveSessions),
+    fileCount: countFilesMatching(liveSessions, (filePath) => filePath.endsWith(".jsonl"))
+  };
+  const sessionIndexCheck: SourcePathCheck = {
+    label: "session_index",
+    path: sessionIndex,
+    exists: pathExists(sessionIndex),
+    fileCount: countFiles(sessionIndex)
+  };
+  const historyCheck: SourcePathCheck = {
+    label: "history",
+    path: history,
+    exists: pathExists(history),
+    fileCount: countFiles(history)
+  };
+
   const checks: SourcePathCheck[] = [
-    {
-      label: "data_root",
-      path: dataRoot,
-      exists: pathExists(dataRoot)
-    },
-    {
-      label: "archived_sessions",
-      path: archivedSessions,
-      exists: pathExists(archivedSessions),
-      fileCount: countFilesMatching(archivedSessions, (filePath) => filePath.endsWith(".jsonl"))
-    },
-    {
-      label: "session_index",
-      path: sessionIndex,
-      exists: pathExists(sessionIndex),
-      fileCount: countFiles(sessionIndex)
-    },
-    {
-      label: "history",
-      path: history,
-      exists: pathExists(history),
-      fileCount: countFiles(history)
-    }
+    dataRootCheck,
+    archivedSessionsCheck,
+    liveSessionsCheck,
+    sessionIndexCheck,
+    historyCheck
   ];
+  const hasDataRoot = dataRootCheck.exists;
+  const hasArchivedSessions = archivedSessionsCheck.exists;
+  const hasLiveSessions = liveSessionsCheck.exists;
+  const hasLiveCaptures = (liveSessionsCheck.fileCount ?? 0) > 0;
 
   const installStatus =
-    executablePath && checks[0].exists && checks[1].exists
+    executablePath && hasDataRoot && (hasArchivedSessions || hasLiveSessions)
       ? "installed"
       : executablePath || checks.some((check) => check.exists)
         ? "partial"
@@ -50,7 +67,8 @@ export function detectCodexSource(): DiscoveredSource {
     installStatus,
     checks,
     metadata: {
-      primaryCapturePath: archivedSessions,
+      primaryCapturePath: hasLiveCaptures ? liveSessions : archivedSessions,
+      capturePaths: [archivedSessions, liveSessions],
       auxiliaryFiles: [sessionIndex, history]
     }
   };

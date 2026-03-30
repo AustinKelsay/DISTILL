@@ -153,7 +153,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
 
     fs.writeFileSync(outputPath, lines.join("\n") + (lines.length ? "\n" : ""));
 
-    distillDb.db
+    const exportInsert = distillDb.db
       .prepare(`
         INSERT INTO exports (export_type, label_filter, output_path, record_count, metadata_json)
         VALUES ('jsonl', ?, ?, ?, ?)
@@ -163,6 +163,27 @@ export function exportSessionsByLabel(label: string): ExportReport {
         outputPath,
         sessionRows.length,
         JSON.stringify({ exportedAt })
+      );
+
+    distillDb.db
+      .prepare(`
+        INSERT INTO activity_events (
+          event_type,
+          object_type,
+          object_id,
+          payload_json
+        ) VALUES (?, ?, ?, ?)
+      `)
+      .run(
+        "exported",
+        "export",
+        Number(exportInsert.lastInsertRowid),
+        JSON.stringify({
+          label: normalizedLabel,
+          outputPath,
+          recordCount: sessionRows.length,
+          exportedAt
+        })
       );
 
     return {

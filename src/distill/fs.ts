@@ -52,13 +52,30 @@ export function findExecutable(binaryName: string): string | undefined {
     return undefined;
   }
 
+  const accessMode = process.platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK;
+  const pathExts = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+      .split(";")
+      .filter(Boolean)
+      .map((ext) => ext.toLowerCase())
+    : [];
+  const candidateNames = path.extname(binaryName) || process.platform !== "win32"
+    ? [binaryName]
+    : [binaryName, ...pathExts.map((ext) => `${binaryName}${ext}`)];
+
   for (const part of envPath.split(path.delimiter)) {
-    const candidate = path.join(part, binaryName);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      continue;
+    for (const candidateName of candidateNames) {
+      const candidate = path.join(part, candidateName);
+      try {
+        if (!fs.statSync(candidate).isFile()) {
+          continue;
+        }
+
+        fs.accessSync(candidate, accessMode);
+        return candidate;
+      } catch {
+        continue;
+      }
     }
   }
 
@@ -95,6 +112,12 @@ export function listFilesRecursive(targetPath: string): string[] {
 export function getFileSha256(filePath: string): string {
   const hash = crypto.createHash("sha256");
   hash.update(fs.readFileSync(filePath));
+  return hash.digest("hex");
+}
+
+export function getTextSha256(text: string): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(text);
   return hash.digest("hex");
 }
 

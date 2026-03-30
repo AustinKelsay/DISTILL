@@ -1,5 +1,6 @@
 import path from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
+import { browseDbTable, getDbExplorerSnapshot, runDbQuery } from "../distill/db_inspector";
 import {
   enqueueSourceSyncJob,
   getBackgroundSyncStatus,
@@ -66,6 +67,9 @@ ipcMain.handle("distill:request-background-sync", () => {
   runBackgroundSync("manual");
   return getBackgroundSyncStatus();
 });
+ipcMain.handle("distill:get-db-explorer-snapshot", () => getDbExplorerSnapshot());
+ipcMain.handle("distill:browse-db-table", (_event, request) => browseDbTable(request));
+ipcMain.handle("distill:run-db-query", (_event, request) => runDbQuery(request));
 
 app.whenReady().then(() => {
   markStaleRunningSyncJobsFailed();

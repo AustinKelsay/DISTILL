@@ -22,7 +22,8 @@ function main(): void {
     console.log(`${summary.kind}`);
     console.log(`  discovered: ${summary.discoveredCaptures}`);
     console.log(`  imported: ${summary.importedCaptures}`);
-    console.log(`  skipped: ${summary.skippedCaptures}\n`);
+    console.log(`  skipped: ${summary.skippedCaptures}`);
+    console.log(`  failed: ${summary.failedCaptures}\n`);
   }
 }
 

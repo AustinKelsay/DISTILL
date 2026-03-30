@@ -114,7 +114,11 @@ export function findCapture(
 }
 
 export function updateCaptureStatus(db: DatabaseSync, captureId: number, status: string): void {
-  db.prepare("UPDATE captures SET status = ? WHERE id = ?").run(status, captureId);
+  db.prepare("UPDATE captures SET status = ?, error_text = NULL WHERE id = ?").run(status, captureId);
+}
+
+export function updateCaptureFailure(db: DatabaseSync, captureId: number, errorText: string): void {
+  db.prepare("UPDATE captures SET status = ?, error_text = ? WHERE id = ?").run("failed", errorText, captureId);
 }
 
 export function insertCaptureRecords(
