@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { openDistillDatabase } from "../distill/db";
 import {
@@ -131,6 +132,57 @@ test("db inspector picks the default browse sort and paginates session rows", ()
     assert.equal(result.pageSize, 25);
     assert.equal(result.rows.length, 25);
     assert.equal(rowCellDetail(result.columns, result.rows[0], "title"), "Session 34");
+  });
+});
+
+test("db inspector preserves bigint browse counts", () => {
+  withTempDistill((db) => {
+    insertSource(db);
+
+    db.prepare(`
+      INSERT INTO sessions (
+        source_id,
+        external_session_id,
+        title,
+        updated_at,
+        message_count,
+        raw_capture_count,
+        metadata_json
+      ) VALUES (1, 'session-bigint', 'Bigint session', '2026-03-30T12:00:00Z', 0, 1, '{}')
+    `).run();
+
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    const hugeCount = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+
+    DatabaseSync.prototype.prepare = function patchedPrepare(sql: string, ...args: unknown[]) {
+      const statement = originalPrepare.call(this, sql, ...args as []) as {
+        get: (...params: unknown[]) => unknown;
+      };
+
+      if (sql.includes("COUNT(*) AS total_rows")) {
+        const originalGet = statement.get.bind(statement);
+        statement.get = (...params: unknown[]) => {
+          const row = originalGet(...params) as { total_rows: number } | undefined;
+          return row ? { ...row, total_rows: hugeCount } : row;
+        };
+      }
+
+      return statement as ReturnType<typeof originalPrepare>;
+    };
+
+    try {
+      const result = browseDbTable({
+        tableName: "sessions",
+        filters: [],
+        page: 1,
+        pageSize: 25
+      });
+
+      assert.equal(typeof result.totalRows, "bigint");
+      assert.equal(result.totalRows, hugeCount);
+    } finally {
+      DatabaseSync.prototype.prepare = originalPrepare;
+    }
   });
 });
 

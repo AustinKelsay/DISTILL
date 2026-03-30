@@ -11,6 +11,7 @@ import {
   DbFilterOperator,
   DbQueryRequest,
   DbQueryResult,
+  DbRowCount,
   DbResultColumn,
   DbResultRow,
   DbSort,
@@ -503,6 +504,25 @@ function createDefaultDbFilter(column = getDbVisibleColumns()[0]): DbFilter | nu
   };
 }
 
+function formatDbRowCount(totalRows: DbRowCount): string {
+  return totalRows.toLocaleString();
+}
+
+function getDbPageCount(totalRows: DbRowCount, pageSize: number): number {
+  if (typeof totalRows === "bigint") {
+    if (totalRows <= 0n) {
+      return 1;
+    }
+
+    const pageCount = (totalRows + BigInt(pageSize) - 1n) / BigInt(pageSize);
+    return pageCount > BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number.MAX_SAFE_INTEGER
+      : Number(pageCount);
+  }
+
+  return Math.max(1, Math.ceil(totalRows / pageSize));
+}
+
 function normalizeDbSelectedTable(): void {
   const visibleTables = getVisibleDbTables();
   if (!visibleTables.length) {
@@ -515,8 +535,11 @@ function normalizeDbSelectedTable(): void {
   }
 
   const defaultTableName = dbExplorerSnapshot?.defaultTableName;
+  const hasDefaultTable = defaultTableName
+    ? visibleTables.some((table) => table.name === defaultTableName)
+    : false;
   dbSelectedTableName =
-    (defaultTableName && visibleTables.some((table) => table.name === defaultTableName) ? defaultTableName : undefined)
+    (hasDefaultTable ? defaultTableName : undefined)
     ?? visibleTables[0]?.name
     ?? null;
 }
@@ -779,7 +802,11 @@ function renderDbResultGrid(
   `).join("");
 
   const rowMarkup = rows.map((row) => `
-    <tr class="${selectedRowKey === row.key ? "selected" : ""}" data-db-row-key="${escapeHtml(row.key)}">
+    <tr
+      class="${selectedRowKey === row.key ? "selected" : ""}"
+      data-db-row-key="${escapeHtml(row.key)}"
+      tabindex="0"
+    >
       ${row.cells.map((cell) => `
         <td class="db-cell-${cell.kind}" ${titleAttr(cell.detail)}>
           ${escapeHtml(cell.preview)}
@@ -839,7 +866,7 @@ function renderDbBrowseTab(): string {
   const filterRows = dbBrowseFilters.length
     ? dbBrowseFilters.map((filter, index) => renderDbFilterRow(filter, index, columns)).join("")
     : `<div class="db-filter-empty">No filters applied. Add one to narrow the current table.</div>`;
-  const pageCount = Math.max(1, Math.ceil(dbBrowseResult.totalRows / dbBrowseResult.pageSize));
+  const pageCount = getDbPageCount(dbBrowseResult.totalRows, dbBrowseResult.pageSize);
   const canGoBack = dbBrowseResult.page > 1;
   const canGoForward = dbBrowseResult.page < pageCount;
   const sortColumnOptions = columns.map((column) =>
@@ -967,7 +994,7 @@ function renderDbWorkspace(): void {
   const table = findDbTableSummary(dbSelectedTableName);
   const visibleColumnCount = dbBrowseResult?.schemaColumns.filter((column) => !column.isHidden).length ?? 0;
   const rowCountLabel = dbBrowseResult
-    ? `${dbBrowseResult.totalRows.toLocaleString()} rows`
+    ? `${formatDbRowCount(dbBrowseResult.totalRows)} rows`
     : dbBrowseLoading ? "Loading rows…" : "0 rows";
   const schemaStrip = dbBrowseResult
     ? dbBrowseResult.schemaColumns.map(renderDbSchemaChip).join("")
@@ -1097,7 +1124,7 @@ async function loadDbBrowseResult(): Promise<void> {
   } finally {
     if (token === dbBrowseRequestToken) {
       dbBrowseLoading = false;
-      if (activeView === "db") {
+      if (activeView === "db" && (dbBrowseResult !== null || dbBrowseError !== null)) {
         renderCurrentView();
       }
     }
@@ -1105,6 +1132,10 @@ async function loadDbBrowseResult(): Promise<void> {
 }
 
 async function executeDbQuery(): Promise<void> {
+  if (dbQueryRunning) {
+    return;
+  }
+
   const token = ++dbQueryRequestToken;
   dbQueryRunning = true;
   dbQueryError = null;
@@ -1152,7 +1183,13 @@ function ensureDbViewData(): void {
     return;
   }
 
-  if (dbExplorerSnapshot?.databaseExists && dbSelectedTableName && !dbBrowseResult && !dbBrowseLoading) {
+  if (
+    dbExplorerSnapshot?.databaseExists
+    && dbSelectedTableName
+    && !dbBrowseResult
+    && !dbBrowseLoading
+    && !dbBrowseError
+  ) {
     void loadDbBrowseResult();
   }
 }
@@ -1219,6 +1256,18 @@ function bindDbViewControls(): void {
 
       dbSelectedRowKey = rowKey;
       renderCurrentView();
+    };
+
+    btn.onkeydown = (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+
+      if (event.key === " ") {
+        event.preventDefault();
+      }
+
+      btn.click();
     };
   }
 
@@ -1364,7 +1413,7 @@ function bindDbViewControls(): void {
         dbBrowsePage -= 1;
         void loadDbBrowseResult();
       } else if (direction === "next" && dbBrowseResult) {
-        const pageCount = Math.max(1, Math.ceil(dbBrowseResult.totalRows / dbBrowseResult.pageSize));
+        const pageCount = getDbPageCount(dbBrowseResult.totalRows, dbBrowseResult.pageSize);
         if (dbBrowsePage < pageCount) {
           dbBrowsePage += 1;
           void loadDbBrowseResult();
@@ -1382,6 +1431,9 @@ function bindDbViewControls(): void {
     queryInput.onkeydown = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
+        if (dbQueryRunning) {
+          return;
+        }
         void executeDbQuery();
       }
     };
@@ -1390,6 +1442,9 @@ function bindDbViewControls(): void {
   const runQuery = document.querySelector<HTMLElement>("[data-db-run-query]");
   if (runQuery) {
     runQuery.onclick = () => {
+      if (dbQueryRunning) {
+        return;
+      }
       void executeDbQuery();
     };
   }
@@ -1521,6 +1576,7 @@ function renderSettingsPanel(settings: AppSettingsSnapshot): string {
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Codex archived sessions and history files.")}><span>Codex root</span><span class="settings-note">${escapeHtml(settings.codexHome)}</span></div>
           <div class="settings-row" ${tooltipAttrs("Local root used to discover Claude Code project session files and history.")}><span>Claude root</span><span class="settings-note">${escapeHtml(settings.claudeHome)}</span></div>
           <div class="settings-row" ${tooltipAttrs("SQLite database path used to discover OpenCode sessions.")}><span>OpenCode DB</span><span class="settings-note">${escapeHtml(settings.opencodeDatabasePath)}</span></div>
+          <div class="settings-row" ${tooltipAttrs("Whether OPENCODE_DB_PATH is explicitly set in the environment instead of using the default OpenCode database path.")}><span>OPENCODE_DB_PATH override</span><span class="settings-note">${settings.envOverrides.opencodeDbPath ? "on" : "off"}</span></div>
           <div class="settings-row" ${tooltipAttrs("OpenCode config directory used for runtime configuration.")}><span>OpenCode config</span><span class="settings-note">${escapeHtml(settings.opencodeConfigDir)}</span></div>
           <div class="settings-row" ${tooltipAttrs("OpenCode state directory used for prompt history and related local state.")}><span>OpenCode state</span><span class="settings-note">${escapeHtml(settings.opencodeStateDir)}</span></div>
         </div>
@@ -1916,6 +1972,7 @@ function bindFloatingOverlays(): void {
 
     const tip = target.closest<HTMLElement>("[data-help-tip]");
     if (tip) {
+      event.preventDefault();
       event.stopPropagation();
       dismissTooltip();
       const text = tip.dataset.helpTip;
@@ -1937,7 +1994,7 @@ function bindFloatingOverlays(): void {
     const popover = helpPopoverEl();
     if (popover && popover.contains(target)) return;
     dismissHelpPopover();
-  });
+  }, true);
 
   document.addEventListener("scroll", dismissFloatingOverlays, true);
   document.addEventListener("keydown", (event) => {

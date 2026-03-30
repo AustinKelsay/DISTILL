@@ -222,6 +222,7 @@ export type AppSettingsSnapshot = {
     distillHome: boolean;
     codexHome: boolean;
     claudeHome: boolean;
+    opencodeDbPath: boolean;
     opencodeConfigDir: boolean;
     opencodeStateDir: boolean;
   };
@@ -306,6 +307,8 @@ export type DbSort = {
   direction: DbSortDirection;
 };
 
+export type DbRowCount = number | bigint;
+
 export type DbFilter = {
   column: string;
   operator: DbFilterOperator;
@@ -337,7 +340,7 @@ export type DbBrowseResult = {
   sort: DbSort;
   page: number;
   pageSize: number;
-  totalRows: number;
+  totalRows: DbRowCount;
   columns: DbResultColumn[];
   rows: DbResultRow[];
 };

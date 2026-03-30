@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,5 +50,37 @@ test("discoverCodexCaptures leaves non-standard filenames without a synthetic se
 
     assert.equal(captures.length, 1);
     assert.equal(captures[0]?.externalSessionId, undefined);
+  });
+});
+
+test("discoverCodexCaptures marks live session files distinctly", () => {
+  withTempCodexHome((root) => {
+    const liveSessionsPath = path.join(root, ".codex", "sessions", "2026", "03", "30");
+    ensureDirectory(liveSessionsPath);
+    const codexHome = path.join(root, ".codex");
+    fs.writeFileSync(
+      path.join(liveSessionsPath, "rollout-2026-03-30T08-09-36-live-session-id.jsonl"),
+      "{\"type\":\"message\"}\n"
+    );
+
+    const captures = JSON.parse(execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "const { discoverCodexCaptures } = require('./dist/connectors/codex/discover.js'); process.stdout.write(JSON.stringify(discoverCodexCaptures()));"
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CODEX_HOME: codexHome
+        },
+        encoding: "utf8"
+      }
+    )) as Array<{ captureKind: string; externalSessionId?: string }>;
+
+    assert.equal(captures.length, 1);
+    assert.equal(captures[0]?.captureKind, "live_session");
+    assert.equal(captures[0]?.externalSessionId, "live-session-id");
   });
 });

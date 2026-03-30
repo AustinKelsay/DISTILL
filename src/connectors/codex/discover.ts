@@ -37,7 +37,7 @@ export function discoverCodexCaptures(): DiscoveredCapture[] {
 
       return {
         sourceKind: "codex",
-        captureKind: "archived_session",
+        captureKind: "live_session",
         sourcePath: filePath,
         externalSessionId: extractSessionId(filePath),
         sourceModifiedAt: stat.mtime.toISOString(),

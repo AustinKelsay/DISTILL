@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { addSessionTag, ensureDefaultLabels, toggleSessionLabel } from "../distill/curation";
 import { openDistillDatabase } from "../distill/db";
@@ -92,5 +93,58 @@ test("exportSessionsByLabel trims and normalizes the requested label", () => {
     assert.equal(report.label, "train");
     assert.equal(report.recordCount, 1);
     assert.match(path.basename(report.outputPath), /^train-sessions-/);
+  });
+});
+
+test("exportSessionsByLabel cleans up temp files when the export transaction fails", () => {
+  withTempDistill((root) => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'claude_code', 'Claude Code', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (42, 1, 'session-export-3', 'Rollback me', '/tmp/demo', '2026-03-25T17:00:00Z', 1, 1, '{}')
+    `).run();
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+    toggleSessionLabel(42, "train");
+
+    const originalExec = DatabaseSync.prototype.exec;
+    let failCommit = true;
+
+    DatabaseSync.prototype.exec = function patchedExec(sql: string): unknown {
+      if (failCommit && sql === "COMMIT") {
+        failCommit = false;
+        throw new Error("commit failed");
+      }
+
+      return originalExec.call(this, sql);
+    };
+
+    try {
+      assert.throws(() => exportSessionsByLabel("train"), /commit failed/);
+    } finally {
+      DatabaseSync.prototype.exec = originalExec;
+    }
+
+    const exportsDir = path.join(root, ".distill", "exports");
+    const exportFiles = fs.readdirSync(exportsDir);
+
+    assert.deepEqual(exportFiles, []);
+
+    const verifyDb = openDistillDatabase();
+    const exportCount = verifyDb.db.prepare("SELECT COUNT(*) AS count FROM exports").get() as { count: number };
+    verifyDb.close();
+
+    assert.equal(exportCount.count, 0);
   });
 });

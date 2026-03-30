@@ -12,6 +12,7 @@ import {
   DbForeignKeyInfo,
   DbQueryRequest,
   DbQueryResult,
+  DbRowCount,
   DbResultColumn,
   DbResultRow,
   DbSort,
@@ -329,12 +330,12 @@ export function getDbExplorerSnapshot(): DbExplorerSnapshot {
 
 export function browseDbTable(request: unknown): DbBrowseResult {
   const parsedRequest = parseBrowseRequest(request);
-  const snapshot = getDbExplorerSnapshot();
-  if (!snapshot.databaseExists) {
-    throw new Error(`Database file not found at ${snapshot.databasePath}.`);
+  const databasePath = getDistillDatabasePath();
+  if (!fs.existsSync(databasePath)) {
+    throw new Error(`Database file not found at ${databasePath}.`);
   }
 
-  const db = openInspectorDatabase(snapshot.databasePath);
+  const db = openInspectorDatabase(databasePath);
   try {
     const table = getTableSummary(db, parsedRequest.tableName);
     const schemaColumns = getTableSchemaColumns(db, table.name);
@@ -355,7 +356,7 @@ export function browseDbTable(request: unknown): DbBrowseResult {
     const totalRows = getBrowseCount(db, countSql, where.params);
 
     return {
-      databasePath: snapshot.databasePath,
+      databasePath,
       table,
       schemaColumns,
       foreignKeys,
@@ -659,13 +660,13 @@ function runBrowseSelect(
   );
 }
 
-function getBrowseCount(db: DatabaseSync, sql: string, params: string[]): number {
-  const row = db.prepare(sql).get(...params) as { total_rows: number | bigint } | undefined;
+function getBrowseCount(db: DatabaseSync, sql: string, params: string[]): DbRowCount {
+  const row = db.prepare(sql).get(...params) as { total_rows: DbRowCount } | undefined;
   if (!row) {
     return 0;
   }
 
-  return typeof row.total_rows === "bigint" ? Number(row.total_rows) : row.total_rows;
+  return row.total_rows;
 }
 
 function normalizeFilters(filters: DbFilter[], visibleColumns: DbColumnInfo[]): DbFilter[] {

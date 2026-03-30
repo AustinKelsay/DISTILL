@@ -69,6 +69,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
 
   const timestampStem = exportedAt.replace(/[:.]/g, "-");
   const outputPath = path.join(exportsDir, `${makeSafeStem(normalizedLabel)}-sessions-${timestampStem}.jsonl`);
+  const tempOutputPath = `${outputPath}.tmp`;
 
   const distillDb = openDistillDatabase();
   try {
@@ -151,7 +152,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
       );
     }
 
-    fs.writeFileSync(outputPath, lines.join("\n") + (lines.length ? "\n" : ""));
+    fs.writeFileSync(tempOutputPath, lines.join("\n") + (lines.length ? "\n" : ""));
 
     let transactionOpen = false;
 
@@ -194,6 +195,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
 
       distillDb.db.exec("COMMIT");
       transactionOpen = false;
+      fs.renameSync(tempOutputPath, outputPath);
     } catch (error) {
       if (transactionOpen) {
         try {
@@ -201,6 +203,12 @@ export function exportSessionsByLabel(label: string): ExportReport {
         } catch {
           // Preserve the original export failure below.
         }
+      }
+
+      try {
+        fs.unlinkSync(tempOutputPath);
+      } catch {
+        // Ignore cleanup failures so the export error remains primary.
       }
 
       throw error;

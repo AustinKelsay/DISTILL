@@ -6,8 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { sourceConnectors } from "../connectors";
 import { SourceConnector } from "../connectors/types";
+import { openDistillDatabase } from "../distill/db";
+import { ensureDirectory, getTextSha256 } from "../distill/fs";
 import { runImport } from "../distill/import";
-import { ensureDirectory } from "../distill/fs";
 import { DiscoveredCapture } from "../shared/types";
 
 type SavedEnv = Record<
@@ -200,23 +201,25 @@ test("runImport bootstraps the database and records discovered captures", () => 
     const report = runImport();
     const db = new DatabaseSync(report.databasePath);
 
-    const sourceCount = db.prepare("SELECT COUNT(*) AS count FROM sources").get() as { count: number };
-    const captureCount = db.prepare("SELECT COUNT(*) AS count FROM captures").get() as { count: number };
-    const captureRecordCount = db.prepare("SELECT COUNT(*) AS count FROM capture_records").get() as { count: number };
-    const sessionCount = db.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number };
-    const messageCount = db.prepare("SELECT COUNT(*) AS count FROM messages").get() as { count: number };
-    const activityCount = db.prepare("SELECT COUNT(*) AS count FROM activity_events").get() as { count: number };
+    try {
+      const sourceCount = db.prepare("SELECT COUNT(*) AS count FROM sources").get() as { count: number };
+      const captureCount = db.prepare("SELECT COUNT(*) AS count FROM captures").get() as { count: number };
+      const captureRecordCount = db.prepare("SELECT COUNT(*) AS count FROM capture_records").get() as { count: number };
+      const sessionCount = db.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number };
+      const messageCount = db.prepare("SELECT COUNT(*) AS count FROM messages").get() as { count: number };
+      const activityCount = db.prepare("SELECT COUNT(*) AS count FROM activity_events").get() as { count: number };
 
-    assert.equal(sourceCount.count, 3);
-    assert.equal(captureCount.count, 2);
-    assert.ok(captureRecordCount.count >= 2);
-    assert.equal(sessionCount.count, 2);
-    assert.ok(messageCount.count >= 2);
-    assert.equal(activityCount.count, 2);
-    assert.equal(report.sourceSummaries.length, 3);
-    assert.equal(report.sourceSummaries.every((summary) => summary.failedCaptures === 0), true);
-
-    db.close();
+      assert.equal(sourceCount.count, 3);
+      assert.equal(captureCount.count, 2);
+      assert.ok(captureRecordCount.count >= 2);
+      assert.equal(sessionCount.count, 2);
+      assert.ok(messageCount.count >= 2);
+      assert.equal(activityCount.count, 2);
+      assert.equal(report.sourceSummaries.length, 3);
+      assert.equal(report.sourceSummaries.every((summary) => summary.failedCaptures === 0), true);
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -657,6 +660,104 @@ test("runImport reuses the same failed capture row when snapshotting the same ca
       assert.match(secondFailure?.errorText ?? "", /snapshot exploded 2/);
 
       db.close();
+    } finally {
+      sourceConnectors[connectorIndex] = originalConnector;
+    }
+  });
+});
+
+test("runImport reuses legacy snapshot failure hashes", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const failingCapture: DiscoveredCapture = {
+      sourceKind: "opencode",
+      captureKind: "session_export",
+      sourcePath: "opencode://session/snapshot-failure",
+      externalSessionId: "snapshot-failure",
+      sourceModifiedAt: "2026-03-30T08:10:00.000Z",
+      sourceSizeBytes: 42,
+      metadata: {}
+    };
+    const errorText = "snapshot exploded legacy";
+    const legacyRawSha256 = getTextSha256(
+      `snapshot-failure:${failingCapture.sourcePath}:${failingCapture.sourceModifiedAt ?? ""}:${errorText}`
+    );
+
+    const distillDb = openDistillDatabase();
+    distillDb.db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'opencode', 'OpenCode', 'installed', '2026-03-30T00:00:00Z', '{}')
+    `).run();
+    distillDb.db.prepare(`
+      INSERT INTO captures (
+        source_id,
+        capture_kind,
+        external_session_id,
+        source_path,
+        source_modified_at,
+        source_size_bytes,
+        raw_sha256,
+        raw_payload_json,
+        parser_version,
+        status,
+        error_text,
+        captured_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      1,
+      failingCapture.captureKind,
+      failingCapture.externalSessionId ?? null,
+      failingCapture.sourcePath,
+      failingCapture.sourceModifiedAt ?? null,
+      failingCapture.sourceSizeBytes ?? null,
+      legacyRawSha256,
+      JSON.stringify({
+        sourceKind: failingCapture.sourceKind,
+        metadata: failingCapture.metadata
+      }),
+      "v0",
+      "failed",
+      "snapshot exploded 1",
+      "2026-03-30T08:10:00.000Z"
+    );
+    distillDb.close();
+
+    const connectorIndex = sourceConnectors.findIndex((connector) => connector.kind === "opencode");
+    assert.notEqual(connectorIndex, -1);
+
+    const originalConnector = sourceConnectors[connectorIndex] as SourceConnector;
+    sourceConnectors[connectorIndex] = {
+      ...originalConnector,
+      discoverCaptures: () => [failingCapture],
+      snapshotCapture: () => {
+        throw new Error(errorText);
+      }
+    };
+
+    try {
+      const report = runImport();
+      const db = new DatabaseSync(report.databasePath);
+
+      try {
+        const rows = db
+          .prepare(`
+            SELECT c.raw_sha256, c.status, c.error_text
+            FROM captures c
+            JOIN sources s ON s.id = c.source_id
+            WHERE s.kind = 'opencode' AND c.source_path = ?
+          `)
+          .all(failingCapture.sourcePath) as Array<{ raw_sha256: string; status: string; error_text: string | null }>;
+        const failedReport = report.captures.find((capture) => capture.sourcePath === failingCapture.sourcePath);
+
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0]?.raw_sha256, legacyRawSha256);
+        assert.equal(rows[0]?.status, "failed");
+        assert.equal(rows[0]?.error_text, errorText);
+        assert.equal(failedReport?.rawSha256, legacyRawSha256);
+      } finally {
+        db.close();
+      }
     } finally {
       sourceConnectors[connectorIndex] = originalConnector;
     }
