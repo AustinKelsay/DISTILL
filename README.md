@@ -4,10 +4,11 @@ Distill is a local-first desktop app for collecting, normalizing, indexing, tagg
 
 Branding note: the final `L` in `DISTILL` stands for `locally`.
 
-The first two local sources are:
+The first local sources are:
 
 - OpenAI Codex CLI
 - Claude Code
+- OpenCode
 
 The architectural line is deliberate:
 
@@ -21,14 +22,14 @@ The architectural line is deliberate:
 Implemented now:
 
 - Electron + TypeScript desktop scaffold
-- local source detection for Codex CLI and Claude Code
+- local source detection for Codex CLI, Claude Code, and OpenCode
 - CLI `doctor` command
 - SQLite bootstrap from `schema.sql`
 - CLI `import` command
 - CLI `export` command
 - idempotent raw capture recording keyed by source path and SHA-256
 - normalized `sessions`, `messages`, and `artifacts` import
-- parser coverage for Codex archived sessions and Claude project sessions
+- parser coverage for Codex archived sessions, Claude project sessions, and OpenCode session exports
 - basic dashboard query for recent sessions
 - interactive search UI over normalized FTS results
 - session detail query and transcript read model
@@ -60,6 +61,7 @@ Path overrides:
 - `DISTILL_HOME`: override the Distill working directory
 - `CODEX_HOME`: override the Codex data root
 - `CLAUDE_HOME`: override the Claude Code data root
+- `OPENCODE_CONFIG_DIR`: override the OpenCode config directory
 
 ## Supported Sources
 
@@ -75,7 +77,14 @@ Claude Code:
 - reads project session files from `~/.claude/projects`
 - uses `history.jsonl` as auxiliary metadata only
 
-Both connectors preserve raw records and derive user-facing transcript messages from filtered subsets of those event streams.
+OpenCode:
+
+- detects the `opencode` executable on `PATH`
+- discovers sessions through `opencode db ... --format json`
+- parses `opencode export <sessionId>` JSON as the transcript source of truth
+- preserves text, reasoning, tool, step, and file trace data in the normalized transcript
+
+All connectors preserve raw records and derive user-facing transcript messages from provider-specific local capture formats.
 
 Operational notes:
 
@@ -142,8 +151,8 @@ npm start
 The current importer:
 
 1. detects local sources
-2. discovers candidate capture files
-3. hashes each raw file
+2. discovers candidate captures
+3. snapshots and hashes each raw capture
 4. skips captures already imported with the same `(source, path, sha256)`
 5. parses raw records
 6. upserts normalized sessions
@@ -168,6 +177,7 @@ src/
   connectors/
     codex/
     claude_code/
+    opencode/
   distill/
   electron/
   renderer/

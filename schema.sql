@@ -233,6 +233,13 @@ CREATE TABLE IF NOT EXISTS exports (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- User preferences (key-value store for UI settings).
+CREATE TABLE IF NOT EXISTS user_preferences (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Search index over normalized message text and session metadata.
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts
 USING fts5(
