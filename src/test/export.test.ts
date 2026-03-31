@@ -55,6 +55,11 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
     const report = exportSessionsByLabel("train");
     const lines = fs.readFileSync(report.outputPath, "utf8").trim().split("\n");
     const payload = JSON.parse(lines[0] ?? "{}");
+    const verifyDb = openDistillDatabase();
+    const activityEvents = verifyDb.db
+      .prepare("SELECT event_type FROM activity_events ORDER BY id ASC")
+      .all() as Array<{ event_type: string }>;
+    verifyDb.close();
 
     assert.equal(report.recordCount, 1);
     assert.equal(lines.length, 1);
@@ -64,6 +69,7 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
     assert.equal(payload.messages.length, 2);
     assert.equal(payload.turn_pairs.length, 1);
     assert.equal(payload.turn_pairs[0].assistant, "Here is a tighter launch draft.");
+    assert.deepEqual(activityEvents.map((row) => row.event_type), ["export_written"]);
   });
 });
 

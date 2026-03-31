@@ -182,7 +182,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
           ) VALUES (?, ?, ?, ?)
         `)
         .run(
-          "exported",
+          "export_written",
           "export",
           Number(exportInsert.lastInsertRowid),
           JSON.stringify({

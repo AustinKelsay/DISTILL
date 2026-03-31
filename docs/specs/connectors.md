@@ -10,13 +10,13 @@ Every source connector exposes exactly four operations:
 interface SourceConnector {
   kind: "codex" | "claude_code" | "opencode";
   detect(): DiscoveredSource;
-  discover(): DiscoveredCapture[];
-  snapshot(capture: DiscoveredCapture): CaptureSnapshot;
-  parse(capture: DiscoveredCapture, snapshot: CaptureSnapshot): ParsedCapture;
+  discoverCaptures(): DiscoveredCapture[];
+  snapshotCapture(capture: DiscoveredCapture): CaptureSnapshot;
+  parseCapture(capture: DiscoveredCapture, snapshot: CaptureSnapshot): ParsedCapture;
 }
 ```
 
-The names in code may vary temporarily, but the logical contract is fixed.
+The canonical method names match the current shared connector type and should not drift.
 
 ## Allowed Responsibilities
 

@@ -23,6 +23,7 @@ Every behavior-changing PR must answer all of these:
 - Which canonical spec file did this change touch?
 - Does the current implementation now match the canonical spec?
 - If not, was `docs/gaps/current-state-gap-register.md` updated?
+- Which gap IDs are affected by this change? If none, say `no gaps` explicitly.
 - Does `docs/testing/contract-test-matrix.md` need new or changed scenarios?
 - Are executable tests required now, or intentionally deferred to a listed follow-up branch?
 - Did any root doc need a current-state summary update?
