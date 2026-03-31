@@ -22,6 +22,7 @@ type SavedEnv = Record<
   | "TEST_OPENCODE_DB_PATH"
   | "TEST_OPENCODE_DB_QUERY_JSON"
   | "TEST_OPENCODE_EXPORT_DIR"
+  | "TEST_OPENCODE_TRUNCATE_WHEN_PIPE"
   | "PATH",
   string | undefined
 >;
@@ -49,6 +50,7 @@ function withTempEnv<T>(fn: (root: string) => T): T {
     TEST_OPENCODE_DB_PATH: process.env.TEST_OPENCODE_DB_PATH,
     TEST_OPENCODE_DB_QUERY_JSON: process.env.TEST_OPENCODE_DB_QUERY_JSON,
     TEST_OPENCODE_EXPORT_DIR: process.env.TEST_OPENCODE_EXPORT_DIR,
+    TEST_OPENCODE_TRUNCATE_WHEN_PIPE: process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE,
     PATH: process.env.PATH
   };
 
@@ -168,8 +170,14 @@ if (args[0] === "export") {
     process.exit(1);
   }
 
-  process.stdout.write(\`Exporting session: \${session}\\n\`);
-  process.stdout.write(fs.readFileSync(file, "utf8"));
+  const output = fs.readFileSync(file, "utf8");
+  const shouldTruncate =
+    process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE === "1"
+    && fs.fstatSync(1).isFIFO()
+    && output.length > 65536;
+
+  process.stderr.write(\`Exporting session: \${session}\\n\`);
+  process.stdout.write(shouldTruncate ? output.slice(0, 65536) : output);
   process.exit(0);
 }
 
@@ -502,6 +510,89 @@ test("runImport imports OpenCode sessions through the fake CLI and keeps failure
     assert.equal(report.captures.find((capture) => capture.externalSessionId === "ses_ok")?.status, "imported");
     assert.equal(report.captures.find((capture) => capture.externalSessionId === "ses_fail")?.status, "failed");
     assert.match(report.captures.find((capture) => capture.externalSessionId === "ses_fail")?.errorText ?? "", /missing export/i);
+
+    db.close();
+  });
+});
+
+test("runImport imports large OpenCode exports even when pipe stdout truncates", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+    process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE = "1";
+
+    const largeText = "A".repeat(70_000);
+
+    writeFakeOpenCodeExecutable(
+      root,
+      [
+        {
+          id: "ses_large",
+          title: "Large export",
+          directory: "/tmp/opencode-demo",
+          version: "1.3.3",
+          time_created: 1774543194067,
+          time_updated: 1774543475213,
+          time_archived: null,
+          share_url: null
+        }
+      ],
+      {
+        ses_large: JSON.stringify({
+          info: {
+            id: "ses_large",
+            directory: "/tmp/opencode-demo",
+            title: "Large export",
+            version: "1.3.3",
+            time: { created: 1774543194067, updated: 1774543475213 }
+          },
+          messages: [
+            {
+              info: {
+                id: "msg_user",
+                role: "user",
+                time: { created: 1774543194080 },
+                model: { providerID: "openai", modelID: "gpt-5.4" }
+              },
+              parts: [{ id: "part_user_text", type: "text", text: "Import the large export" }]
+            },
+            {
+              info: {
+                id: "msg_assistant",
+                role: "assistant",
+                parentID: "msg_user",
+                time: { created: 1774543194090 },
+                providerID: "openai",
+                modelID: "gpt-5.4"
+              },
+              parts: [{ id: "part_large_text", type: "text", text: largeText }]
+            }
+          ]
+        })
+      }
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
+    const capture = report.captures.find((entry) => entry.externalSessionId === "ses_large");
+    const session = db
+      .prepare("SELECT message_count FROM sessions WHERE external_session_id = 'ses_large'")
+      .get() as { message_count: number };
+    const messages = db
+      .prepare(`
+        SELECT text
+        FROM messages
+        WHERE session_id = (SELECT id FROM sessions WHERE external_session_id = 'ses_large')
+        ORDER BY ordinal
+      `)
+      .all() as Array<{ text: string }>;
+
+    assert.equal(opencodeSummary?.importedCaptures, 1);
+    assert.equal(opencodeSummary?.failedCaptures, 0);
+    assert.equal(capture?.status, "imported");
+    assert.equal(session.message_count, 2);
+    assert.equal(messages[1]?.text.length, largeText.length);
+    assert.equal(messages[1]?.text, largeText);
 
     db.close();
   });

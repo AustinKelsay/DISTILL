@@ -1,4 +1,6 @@
-import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { findExecutable } from "../../distill/fs";
 import {
@@ -56,6 +58,14 @@ type ExecFileSyncError = Error & {
   stderr?: string | Buffer;
 };
 
+type OpenCodeCommandFailure = {
+  error?: unknown;
+  stdout?: string;
+  stderr?: string;
+  status?: number | null;
+  signal?: NodeJS.Signals | null;
+};
+
 function outputText(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim()) {
     return value.trim();
@@ -71,6 +81,69 @@ function outputText(value: unknown): string | undefined {
 
 function isNoRowsMessage(message: string | undefined): boolean {
   return Boolean(message && /\bno rows?\b|\bno data\b/i.test(message));
+}
+
+function throwOpenCodeCommandFailure(failure: OpenCodeCommandFailure): never {
+  const error = failure.error;
+  if (error && !(error instanceof Error)) {
+    throw error;
+  }
+
+  const execError = error as ExecFileSyncError | undefined;
+  const stdout = failure.stdout ?? outputText(execError?.stdout);
+  const stderr = failure.stderr ?? outputText(execError?.stderr);
+  const detail =
+    stderr
+    ?? stdout
+    ?? execError?.message
+    ?? (typeof failure.status === "number" ? `OpenCode command exited with status ${failure.status}` : undefined)
+    ?? "OpenCode command failed";
+
+  if (execError?.code === "ENOENT") {
+    throw new OpenCodeDiscoveryError("not_installed", "OpenCode executable not found", {
+      cause: error,
+      stdout,
+      stderr
+    });
+  }
+
+  if (
+    execError?.code === "ETIMEDOUT"
+    || failure.signal === "SIGTERM"
+    || /timed out|ETIMEDOUT/i.test(detail)
+  ) {
+    throw new OpenCodeDiscoveryError("timeout", detail, {
+      cause: error,
+      stdout,
+      stderr
+    });
+  }
+
+  if (
+    execError?.code === "EACCES"
+    || execError?.code === "EPERM"
+    || /permission denied|operation not permitted/i.test(detail)
+  ) {
+    throw new OpenCodeDiscoveryError("permission_denied", detail, {
+      cause: error,
+      stdout,
+      stderr
+    });
+  }
+
+  if (isNoRowsMessage(detail)) {
+    throw new OpenCodeDiscoveryError("no_rows", detail, {
+      cause: error,
+      stdout,
+      stderr
+    });
+  }
+
+  throw new OpenCodeDiscoveryError("cli_error", detail, {
+    cause: error,
+    stdout,
+    stderr
+  });
 }
 
 export function getOpenCodeExecutablePath(): string | undefined {
@@ -116,56 +189,55 @@ export function runOpenCodeCommand(args: string[], executablePath = getOpenCodeE
       maxBuffer: OPEN_CODE_COMMAND_MAX_BUFFER
     });
   } catch (error) {
-    if (!(error instanceof Error)) {
-      throw error;
-    }
+    throwOpenCodeCommandFailure({ error });
+  }
+}
 
-    const execError = error as ExecFileSyncError;
-    const stdout = outputText(execError.stdout);
-    const stderr = outputText(execError.stderr);
-    const detail = stderr ?? stdout ?? execError.message;
+export function runOpenCodeCommandToFile(
+  args: string[],
+  executablePath = getOpenCodeExecutablePath()
+): string {
+  if (!executablePath) {
+    throw new OpenCodeDiscoveryError("not_installed", "OpenCode executable not found");
+  }
 
-    if (execError.code === "ENOENT") {
-      throw new OpenCodeDiscoveryError("not_installed", "OpenCode executable not found", {
-        cause: error,
-        stdout,
-        stderr
-      });
-    }
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "distill-opencode-"));
+  const stdoutPath = path.join(tempDir, "stdout.txt");
+  let stdoutFd: number | undefined;
 
-    if (execError.code === "ETIMEDOUT" || /timed out|ETIMEDOUT/i.test(detail)) {
-      throw new OpenCodeDiscoveryError("timeout", detail || "OpenCode command timed out", {
-        cause: error,
-        stdout,
-        stderr
-      });
-    }
+  try {
+    stdoutFd = fs.openSync(stdoutPath, "w");
 
-    if (
-      execError.code === "EACCES"
-      || execError.code === "EPERM"
-      || /permission denied|operation not permitted/i.test(detail)
-    ) {
-      throw new OpenCodeDiscoveryError("permission_denied", detail || "OpenCode command permission denied", {
-        cause: error,
-        stdout,
-        stderr
-      });
-    }
-
-    if (isNoRowsMessage(detail)) {
-      throw new OpenCodeDiscoveryError("no_rows", detail, {
-        cause: error,
-        stdout,
-        stderr
-      });
-    }
-
-    throw new OpenCodeDiscoveryError("cli_error", detail || "OpenCode command failed", {
-      cause: error,
-      stdout,
-      stderr
+    const result = spawnSync(executablePath, args, {
+      encoding: "utf8",
+      timeout: OPEN_CODE_COMMAND_TIMEOUT_MS,
+      maxBuffer: OPEN_CODE_COMMAND_MAX_BUFFER,
+      stdio: ["ignore", stdoutFd, "pipe"]
     });
+
+    fs.closeSync(stdoutFd);
+    stdoutFd = undefined;
+
+    const stdout = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, "utf8") : "";
+    const stderr = outputText(result.stderr);
+
+    if (result.error || result.status !== 0) {
+      throwOpenCodeCommandFailure({
+        error: result.error,
+        stdout,
+        stderr,
+        status: result.status,
+        signal: result.signal
+      });
+    }
+
+    return stdout;
+  } finally {
+    if (stdoutFd !== undefined) {
+      fs.closeSync(stdoutFd);
+    }
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 

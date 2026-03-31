@@ -197,16 +197,33 @@ function renderSyncStatus(status: BackgroundSyncStatus): void {
 
   el.textContent = syncStatusText(status);
   el.title = status.errorText ?? status.summary;
-  el.dataset.state = status.state;
+  el.dataset.state = syncStatusTone(status);
 }
 
 function syncStatusText(status: BackgroundSyncStatus | undefined): string {
   if (!status) return "idle";
 
+  const hasWarnings = (status.failedCaptures ?? 0) > 0 || (status.failedEntries?.length ?? 0) > 0;
+
   return status.state === "running" ? "syncing..."
     : status.state === "failed" ? "sync failed"
+    : hasWarnings ? (status.finishedAt ? `sync warnings ${timeAgo(status.finishedAt)}` : "sync warnings")
     : status.finishedAt ? `synced ${timeAgo(status.finishedAt)}`
     : "idle";
+}
+
+function syncStatusTone(status: BackgroundSyncStatus | undefined): "idle" | "running" | "completed" | "warning" | "failed" {
+  if (!status) {
+    return "idle";
+  }
+
+  if (status.state === "running" || status.state === "failed") {
+    return status.state;
+  }
+
+  return (status.failedCaptures ?? 0) > 0 || (status.failedEntries?.length ?? 0) > 0
+    ? "warning"
+    : "completed";
 }
 
 function formatDateTime(dateStr: string | undefined): string {
@@ -362,6 +379,7 @@ function renderLogsView(data: LogsPageData): void {
 
   const entries = filteredLogEntries(data);
   const lastSyncLabel = syncStatusText(data.lastSyncStatus);
+  const lastSyncTone = syncStatusTone(data.lastSyncStatus);
   const emptyState = data.entries.length === 0
     ? `
       <div class="detail-empty">
@@ -390,7 +408,7 @@ function renderLogsView(data: LogsPageData): void {
         <div class="logs-summary">
           <span class="log-summary-chip">${data.counts.total} entries</span>
           <span class="log-summary-chip ${data.counts.errors ? "is-error" : ""}">${data.counts.errors} errors</span>
-          <span class="log-summary-chip">${escapeHtml(lastSyncLabel)}</span>
+          <span class="log-summary-chip ${lastSyncTone === "failed" ? "is-error" : lastSyncTone === "warning" ? "is-warning" : ""}">${escapeHtml(lastSyncLabel)}</span>
         </div>
       </div>
       <div class="logs-controls">

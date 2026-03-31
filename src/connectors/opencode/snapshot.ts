@@ -1,7 +1,7 @@
 import { getTextSha256 } from "../../distill/fs";
 import { DiscoveredCapture } from "../../shared/types";
 import { CaptureSnapshot } from "../types";
-import { runOpenCodeCommand } from "./common";
+import { runOpenCodeCommandToFile } from "./common";
 
 function extractJsonExport(output: string): string {
   const index = output.indexOf("{");
@@ -20,7 +20,7 @@ export function snapshotOpenCodeCapture(capture: DiscoveredCapture): CaptureSnap
     throw new Error("OpenCode capture is missing an external session ID");
   }
 
-  const rawText = extractJsonExport(runOpenCodeCommand(["export", sessionId]));
+  const rawText = extractJsonExport(runOpenCodeCommandToFile(["export", sessionId]));
 
   return {
     rawText,
