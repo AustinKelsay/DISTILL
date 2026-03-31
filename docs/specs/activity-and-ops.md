@@ -55,12 +55,19 @@ Current normative job type:
 Sync jobs may track:
 
 - queued/running/completed/failed status
+- warning status for non-fatal sync completions with warning details
 - attempts
 - scheduling metadata
 - aggregated import metrics
 - last error
 
 Jobs are allowed to summarize work, but they are not the canonical audit model.
+
+Warning-only sync state is operational only:
+
+- it means the sync completed without a fatal job failure
+- warning details and aggregate metrics remain visible in jobs/logs
+- warning-only sync state must not by itself imply a canonical `sync_failed` audit event for the overall sync run
 
 ## Logs Behavior
 

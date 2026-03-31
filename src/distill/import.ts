@@ -27,6 +27,29 @@ import {
 
 const PARSER_VERSION = "v0";
 
+function insertSyncFailureAuditEvent(
+  db: DatabaseSync,
+  input: {
+    sourceKind: string;
+    stage: "detect" | "discover";
+    sourcePath: string;
+    errorText: string;
+  }
+): void {
+  insertActivityEvent(db, {
+    eventType: "sync_failed",
+    objectType: "sync_job",
+    payload: {
+      sourceKind: input.sourceKind,
+      stage: input.stage,
+      sourcePath: input.sourcePath,
+      errorText: input.errorText,
+      fatal: false,
+      scope: "source"
+    }
+  });
+}
+
 function insertCapture(
   db: DatabaseSync,
   sourceId: number,
@@ -233,7 +256,7 @@ function importSourceCaptures(
       }
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
-      if (captureId !== undefined) {
+      if (failureStage === "parse" && captureId !== undefined) {
         updateCaptureFailure(db, captureId, errorText);
       }
       insertActivityEvent(db, {
@@ -298,6 +321,12 @@ export function runImport(): ImportReport {
         source = connector.detect();
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
+        insertSyncFailureAuditEvent(distillDb.db, {
+          sourceKind: connector.kind,
+          stage: "detect",
+          sourcePath: connector.kind,
+          errorText
+        });
         console.warn(`[import] Skipping ${connector.kind} detection: ${errorText}`);
         sourceSummaries.push({
           kind: connector.kind,
@@ -324,6 +353,12 @@ export function runImport(): ImportReport {
         );
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
+        insertSyncFailureAuditEvent(distillDb.db, {
+          sourceKind: source.kind,
+          stage: "discover",
+          sourcePath: source.dataRoot ?? connector.kind,
+          errorText
+        });
         console.warn(`[import] Skipping ${connector.kind} discovery: ${errorText}`);
         sourceSummaries.push({
           kind: source.kind,

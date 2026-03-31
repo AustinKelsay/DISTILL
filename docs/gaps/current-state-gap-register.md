@@ -41,7 +41,7 @@ This document is normative for acknowledged drift between the canonical specs an
 ## GAP-004: Activity Audit Coverage Is Incomplete
 
 - Canonical rule: `activity_events` must cover capture, failure, projection, manual curation, export, and sync lifecycle.
-- Current behavior: activity rows are written for capture insertion and export only.
+- Current behavior: capture insertion, capture failure, projection replacement, export, and source-scoped detect/discover failure rows are audited, but manual curation and top-level sync lifecycle audit coverage remain incomplete.
 - Impacted files: `src/distill/import.ts`, `src/distill/export.ts`, `src/distill/curation.ts`, `src/distill/jobs.ts`
 - Severity: high
 - Target branch: `impl/activity-and-curation-audit`
@@ -55,13 +55,14 @@ This document is normative for acknowledged drift between the canonical specs an
 ## GAP-005: Jobs And Logs Overlap With Audit Semantics
 
 - Canonical rule: jobs and logs are operational views; `activity_events` are the canonical audit trail.
-- Current behavior: logs are driven mainly by `jobs` and `exports`, while `activity_events` are not the authoritative product surface.
+- Current behavior: logs are driven mainly by `jobs` and `exports`; warning-only sync outcomes are inferred in the UI, but jobs/logs do not yet preserve a first-class `warning` status distinct from fatal errors.
 - Impacted files: `src/distill/jobs.ts`, `src/distill/logs.ts`, `src/renderer/app.ts`
 - Severity: medium
 - Target branch: `impl/activity-and-curation-audit`
 - Acceptance criteria:
 - audit and operational responsibilities are cleanly separated
 - logs remain useful without becoming the source of truth for domain events
+- warning-only sync outcomes remain visible as non-fatal operational state
 - discrepancies between jobs/logs/activity are test-covered
 
 ## GAP-006: Manual Curation Is Not Audited

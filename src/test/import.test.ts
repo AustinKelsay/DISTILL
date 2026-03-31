@@ -171,14 +171,14 @@ if (args[0] === "export") {
     process.exit(1);
   }
 
-  const output = fs.readFileSync(file, "utf8");
+  const output = fs.readFileSync(file);
   const shouldTruncate =
     process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE === "1"
     && fs.fstatSync(1).isFIFO()
     && output.length > 65536;
 
   process.stderr.write(\`Exporting session: \${session}\\n\`);
-  process.stdout.write(shouldTruncate ? output.slice(0, 65536) : output);
+  process.stdout.write(shouldTruncate ? output.subarray(0, 65536) : output);
   process.exit(0);
 }
 
@@ -867,6 +867,64 @@ test("runImport audits raw persistence failures and continues with later capture
   });
 });
 
+test("runImport keeps unfinished captures retryable when persistence fails before parse", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const first = runImport();
+    const seededDb = new DatabaseSync(first.databasePath);
+    const captureRow = seededDb
+      .prepare(`
+        SELECT id
+        FROM captures
+        WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
+      `)
+      .get() as { id: number };
+    seededDb
+      .prepare("UPDATE captures SET status = ?, parser_version = ?, error_text = NULL WHERE id = ?")
+      .run("captured", "legacy-v1", captureRow.id);
+    seededDb.exec(`
+      CREATE TRIGGER captures_retry_persist_abort
+      BEFORE UPDATE ON captures
+      WHEN OLD.id = ${captureRow.id} AND NEW.parser_version <> OLD.parser_version
+      BEGIN
+        SELECT RAISE(FAIL, 'retry persistence update exploded');
+      END;
+    `);
+    seededDb.close();
+
+    const second = runImport();
+    const db = new DatabaseSync(first.databasePath);
+    const retriedCapture = db
+      .prepare(`
+        SELECT status, error_text
+        FROM captures
+        WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
+      `)
+      .get() as { status: string; error_text: string | null };
+    const failureEvent = db
+      .prepare(`
+        SELECT object_id, payload_json
+        FROM activity_events
+        WHERE event_type = 'capture_failed'
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get() as { object_id: number | null; payload_json: string };
+    const failedCapture = second.captures.find((capture) => capture.externalSessionId === "abc12345-1111-2222-3333-abcdefabcdef");
+
+    assert.equal(second.sourceSummaries.find((summary) => summary.kind === "codex")?.failedCaptures, 1);
+    assert.equal(retriedCapture.status, "captured");
+    assert.equal(retriedCapture.error_text, null);
+    assert.equal(failureEvent.object_id, captureRow.id);
+    assert.match(failureEvent.payload_json, /"stage":"persistence"/);
+    assert.equal(failedCapture?.status, "failed");
+    assert.match(failedCapture?.errorText ?? "", /retry persistence update exploded/);
+
+    db.close();
+  });
+});
+
 test("runImport rolls back partial normalization writes when session replacement fails", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
@@ -1089,9 +1147,19 @@ test("runImport keeps other connectors importing when OpenCode discovery fails",
     writeFakeOpenCodeExecutable(root, "{not json", {});
 
     const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
     const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
     const codexSummary = report.sourceSummaries.find((summary) => summary.kind === "codex");
     const claudeSummary = report.sourceSummaries.find((summary) => summary.kind === "claude_code");
+    const syncFailureEvent = db
+      .prepare(`
+        SELECT event_type, object_type, object_id, payload_json
+        FROM activity_events
+        WHERE event_type = 'sync_failed'
+        ORDER BY id DESC
+        LIMIT 1
+      `)
+      .get() as { event_type: string; object_type: string; object_id: number | null; payload_json: string };
 
     assert.equal(codexSummary?.importedCaptures, 1);
     assert.equal(claudeSummary?.importedCaptures, 1);
@@ -1103,6 +1171,68 @@ test("runImport keeps other connectors importing when OpenCode discovery fails",
       report.failedEntries.find((entry) => entry.sourceKind === "opencode")?.errorText ?? "",
       /OpenCode session discovery failed: OpenCode command returned invalid JSON/
     );
+
+    assert.equal(syncFailureEvent.event_type, "sync_failed");
+    assert.equal(syncFailureEvent.object_type, "sync_job");
+    assert.equal(syncFailureEvent.object_id, null);
+    assert.match(syncFailureEvent.payload_json, /"stage":"discover"/);
+    assert.match(syncFailureEvent.payload_json, /"sourceKind":"opencode"/);
+
+    db.close();
+  });
+});
+
+test("runImport audits connector detection failures and keeps healthy connectors importing", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const connectorIndex = sourceConnectors.findIndex((connector) => connector.kind === "opencode");
+    assert.notEqual(connectorIndex, -1);
+
+    const originalConnector = sourceConnectors[connectorIndex] as SourceConnector;
+    sourceConnectors[connectorIndex] = {
+      ...originalConnector,
+      detect: () => {
+        throw new Error("detect exploded");
+      }
+    };
+
+    try {
+      const report = runImport();
+      const db = new DatabaseSync(report.databasePath);
+      const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
+      const codexSummary = report.sourceSummaries.find((summary) => summary.kind === "codex");
+      const claudeSummary = report.sourceSummaries.find((summary) => summary.kind === "claude_code");
+      const syncFailureEvent = db
+        .prepare(`
+          SELECT event_type, object_type, object_id, payload_json
+          FROM activity_events
+          WHERE event_type = 'sync_failed'
+          ORDER BY id DESC
+          LIMIT 1
+        `)
+        .get() as { event_type: string; object_type: string; object_id: number | null; payload_json: string };
+
+      assert.equal(codexSummary?.importedCaptures, 1);
+      assert.equal(claudeSummary?.importedCaptures, 1);
+      assert.equal(opencodeSummary?.discoveredCaptures, 0);
+      assert.equal(opencodeSummary?.importedCaptures, 0);
+      assert.equal(opencodeSummary?.failedCaptures, 0);
+      assert.equal(report.captures.length, 2);
+      assert.match(
+        report.failedEntries.find((entry) => entry.sourceKind === "opencode")?.errorText ?? "",
+        /detect exploded/
+      );
+      assert.equal(syncFailureEvent.event_type, "sync_failed");
+      assert.equal(syncFailureEvent.object_type, "sync_job");
+      assert.equal(syncFailureEvent.object_id, null);
+      assert.match(syncFailureEvent.payload_json, /"stage":"detect"/);
+      assert.match(syncFailureEvent.payload_json, /"sourceKind":"opencode"/);
+
+      db.close();
+    } finally {
+      sourceConnectors[connectorIndex] = originalConnector;
+    }
   });
 });
 
