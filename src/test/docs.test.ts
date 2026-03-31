@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+const repoRoot = process.cwd();
+
+function readRepoFile(relativePath: string): string {
+  return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
+}
+
+test("canonical docs package exists", () => {
+  const requiredFiles = [
+    "docs/README.md",
+    "docs/specs/architecture.md",
+    "docs/specs/data-model.md",
+    "docs/specs/ingest-pipeline.md",
+    "docs/specs/connectors.md",
+    "docs/specs/search-curation-export.md",
+    "docs/specs/activity-and-ops.md",
+    "docs/governance/spec-governance.md",
+    "docs/gaps/current-state-gap-register.md",
+    "docs/roadmap/spec-alignment-plan.md",
+    "docs/testing/contract-test-matrix.md"
+  ];
+
+  for (const relativePath of requiredFiles) {
+    assert.equal(fs.existsSync(path.join(repoRoot, relativePath)), true, `${relativePath} should exist`);
+  }
+});
+
+test("docs index defines authority order and links the canonical spec set", () => {
+  const docsIndex = readRepoFile("docs/README.md");
+
+  assert.match(docsIndex, /Normative vs Non-Normative/);
+  assert.match(docsIndex, /How To Read The Docs/);
+  assert.match(docsIndex, /Source Of Truth Files/);
+  assert.match(docsIndex, /Updating Docs And Tests/);
+
+  const requiredLinks = [
+    "docs/specs/architecture.md",
+    "docs/specs/data-model.md",
+    "docs/specs/ingest-pipeline.md",
+    "docs/specs/connectors.md",
+    "docs/specs/search-curation-export.md",
+    "docs/specs/activity-and-ops.md",
+    "docs/governance/spec-governance.md",
+    "docs/gaps/current-state-gap-register.md",
+    "docs/roadmap/spec-alignment-plan.md",
+    "docs/testing/contract-test-matrix.md"
+  ];
+
+  for (const relativePath of requiredLinks) {
+    assert.match(docsIndex, new RegExp(relativePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+});
+
+test("root docs point to the canonical docs package and discovery is non-normative", () => {
+  const readme = readRepoFile("README.md");
+  const plan = readRepoFile("PLAN.md");
+  const implementation = readRepoFile("IMPLEMENTATION.md");
+  const discovery = readRepoFile("DISCOVERY.md");
+
+  assert.match(readme, /Implemented Now/);
+  assert.match(readme, /Not Implemented Now/);
+  assert.match(readme, /docs\/README\.md/);
+  assert.match(readme, /not the canonical source of truth/i);
+
+  assert.match(plan, /docs\/roadmap\/spec-alignment-plan\.md/);
+  assert.match(plan, /roadmap pointer/i);
+
+  assert.match(implementation, /docs\/specs\/architecture\.md/);
+  assert.match(implementation, /docs\/gaps\/current-state-gap-register\.md/);
+  assert.match(implementation, /informative/i);
+
+  assert.match(discovery, /non-normative discovery evidence/i);
+  assert.match(discovery, /docs\/specs\/architecture\.md/);
+});
+
+test("gap register and contract test matrix track the required drift-guard surface", () => {
+  const gapRegister = readRepoFile("docs/gaps/current-state-gap-register.md");
+  const testMatrix = readRepoFile("docs/testing/contract-test-matrix.md");
+  const governance = readRepoFile("docs/governance/spec-governance.md");
+
+  for (const gapId of [
+    "GAP-001",
+    "GAP-002",
+    "GAP-003",
+    "GAP-004",
+    "GAP-005",
+    "GAP-006",
+    "GAP-007",
+    "GAP-008"
+  ]) {
+    assert.match(gapRegister, new RegExp(gapId));
+  }
+
+  for (const suiteName of [
+    "connector_contract",
+    "raw_capture_persistence",
+    "projection_replacement",
+    "activity_audit",
+    "search_indexing",
+    "manual_curation",
+    "export_contract",
+    "sync_jobs_and_logs",
+    "doc_truthfulness"
+  ]) {
+    assert.match(testMatrix, new RegExp(suiteName));
+  }
+
+  assert.match(governance, /Authority Order/);
+  assert.match(governance, /PR Checklist/);
+  assert.match(governance, /How To Record Gaps/);
+  assert.match(governance, /How To Add New Source Connectors/);
+});
