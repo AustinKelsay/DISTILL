@@ -114,3 +114,27 @@ test("gap register and contract test matrix track the required drift-guard surfa
   assert.match(governance, /How To Record Gaps/);
   assert.match(governance, /How To Add New Source Connectors/);
 });
+
+test("agent instruction files exist and point agents to the canonical docs in order", () => {
+  const agents = readRepoFile("AGENTS.md");
+  const claude = readRepoFile("CLAUDE.md");
+
+  for (const content of [agents, claude]) {
+    assert.match(content, /docs\/README\.md/);
+    assert.match(content, /docs\/specs\/architecture\.md/);
+    assert.match(content, /docs\/specs\/data-model\.md/);
+    assert.match(content, /docs\/specs\/ingest-pipeline\.md/);
+    assert.match(content, /docs\/specs\/connectors\.md/);
+    assert.match(content, /docs\/specs\/search-curation-export\.md/);
+    assert.match(content, /docs\/specs\/activity-and-ops\.md/);
+    assert.match(content, /docs\/gaps\/current-state-gap-register\.md/);
+    assert.match(content, /docs\/testing\/contract-test-matrix\.md/);
+    assert.match(content, /docs\/roadmap\/spec-alignment-plan\.md/);
+    assert.match(content, /docs\/governance\/spec-governance\.md/);
+    assert.match(content, /canonical docs win/i);
+    assert.match(content, /README\.md/);
+    assert.match(content, /PLAN\.md/);
+    assert.match(content, /IMPLEMENTATION\.md/);
+    assert.match(content, /DISCOVERY\.md/);
+  }
+});
