@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getTextSha1 } from "./fs";
 import { getDistillDatabasePath, getDistillHome } from "./paths";
+import { readCaptureContentText } from "./raw_capture";
 import {
+  CaptureContentRef,
+  CaptureStatus,
   DiscoveredSource,
   NormalizedArtifact,
   NormalizedMessage,
@@ -13,6 +16,21 @@ import {
 
 type SourceRow = {
   id: number;
+};
+
+type CapturePayload = {
+  sourceKind?: string;
+  metadata?: Record<string, unknown>;
+  contentRef?: CaptureContentRef;
+};
+
+type CaptureStorageRow = {
+  raw_payload_json: string | null;
+};
+
+type TableInfoRow = {
+  name: string;
+  notnull: number;
 };
 
 export type DistillDatabase = {
@@ -26,6 +44,73 @@ function loadSchema(): string {
   return fs.readFileSync(schemaPath, "utf8");
 }
 
+function migrateLegacySchema(db: DatabaseSync): void {
+  const activityEventColumns = db
+    .prepare("PRAGMA table_info(activity_events)")
+    .all() as TableInfoRow[];
+  const objectIdColumn = activityEventColumns.find((column) => column.name === "object_id");
+
+  if (!objectIdColumn || objectIdColumn.notnull === 0) {
+    return;
+  }
+
+  db.exec("BEGIN");
+  try {
+    // Normalize legacy sentinel values while making snapshot-stage failures nullable.
+    db.exec("DROP TABLE IF EXISTS activity_events__new");
+    db.exec(`
+      CREATE TABLE activity_events__new (
+        id INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        object_type TEXT NOT NULL,
+        object_id INTEGER,
+        session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    db.exec(`
+      INSERT INTO activity_events__new (
+        id,
+        event_type,
+        object_type,
+        object_id,
+        session_id,
+        payload_json,
+        created_at
+      )
+      SELECT
+        id,
+        event_type,
+        object_type,
+        NULLIF(object_id, 0),
+        session_id,
+        payload_json,
+        created_at
+      FROM activity_events
+    `);
+    db.exec("DROP TABLE activity_events");
+    db.exec("ALTER TABLE activity_events__new RENAME TO activity_events");
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_activity_events_created
+        ON activity_events(created_at DESC)
+    `);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_activity_events_session
+        ON activity_events(session_id, created_at DESC)
+    `);
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Preserve the original migration error below.
+    }
+
+    throw error;
+  }
+}
+
 export function openDistillDatabase(): DistillDatabase {
   const distillHome = getDistillHome();
   ensureDirectory(distillHome);
@@ -36,6 +121,7 @@ export function openDistillDatabase(): DistillDatabase {
   const databasePath = getDistillDatabasePath();
   const db = new DatabaseSync(databasePath);
   db.exec(loadSchema());
+  migrateLegacySchema(db);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
 
@@ -105,20 +191,20 @@ export function findCapture(
   sourceId: number,
   sourcePath: string,
   rawSha256: string
-): { id: number; status: string } | undefined {
+): { id: number; status: CaptureStatus } | undefined {
   return db
     .prepare(
       "SELECT id, status FROM captures WHERE source_id = ? AND source_path = ? AND raw_sha256 = ? LIMIT 1"
     )
-    .get(sourceId, sourcePath, rawSha256) as { id: number; status: string } | undefined;
+    .get(sourceId, sourcePath, rawSha256) as { id: number; status: CaptureStatus } | undefined;
 }
 
-export function updateCaptureStatus(db: DatabaseSync, captureId: number, status: string): void {
+export function updateCaptureStatus(db: DatabaseSync, captureId: number, status: CaptureStatus): void {
   db.prepare("UPDATE captures SET status = ?, error_text = NULL WHERE id = ?").run(status, captureId);
 }
 
 export function updateCaptureFailure(db: DatabaseSync, captureId: number, errorText: string): void {
-  db.prepare("UPDATE captures SET status = ?, error_text = ? WHERE id = ?").run("failed", errorText, captureId);
+  db.prepare("UPDATE captures SET status = ?, error_text = ? WHERE id = ?").run("failed_parse", errorText, captureId);
 }
 
 export function insertCaptureRecords(
@@ -299,4 +385,87 @@ export function replaceSessionArtifacts(
       JSON.stringify(artifact.payload)
     );
   }
+}
+
+function parseCapturePayload(rawPayloadJson: string | null): CapturePayload {
+  if (!rawPayloadJson) {
+    return {};
+  }
+
+  try {
+    const payload = JSON.parse(rawPayloadJson) as CapturePayload;
+    return payload && typeof payload === "object" ? payload : {};
+  } catch {
+    return {};
+  }
+}
+
+export function encodeCapturePayload(
+  sourceKind: string,
+  metadata: Record<string, unknown>,
+  contentRef: CaptureContentRef
+): string {
+  return JSON.stringify({
+    sourceKind,
+    metadata,
+    contentRef
+  });
+}
+
+export function getCaptureContentRef(db: DatabaseSync, captureId: number): CaptureContentRef | undefined {
+  const row = db
+    .prepare(`
+      SELECT raw_payload_json
+      FROM captures
+      WHERE id = ?
+      LIMIT 1
+    `)
+    .get(captureId) as CaptureStorageRow | undefined;
+
+  if (!row) {
+    return undefined;
+  }
+
+  const payload = parseCapturePayload(row.raw_payload_json);
+  if (payload.contentRef) {
+    return payload.contentRef;
+  }
+
+  return undefined;
+}
+
+export function readCaptureText(db: DatabaseSync, captureId: number): string | undefined {
+  const contentRef = getCaptureContentRef(db, captureId);
+  if (!contentRef) {
+    return undefined;
+  }
+
+  return readCaptureContentText(contentRef);
+}
+
+export function insertActivityEvent(
+  db: DatabaseSync,
+  input: {
+    eventType: string;
+    objectType: string;
+    objectId?: number | null;
+    sessionId?: number | null;
+    payload: Record<string, unknown>;
+  }
+): void {
+  db.prepare(`
+    INSERT INTO activity_events (
+      event_type,
+      object_type,
+      object_id,
+      session_id,
+      payload_json
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run(
+    input.eventType,
+    input.objectType,
+    input.objectId ?? null,
+    input.sessionId ?? null,
+    JSON.stringify(input.payload)
+  );
 }

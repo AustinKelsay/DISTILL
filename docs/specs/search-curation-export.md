@@ -26,7 +26,7 @@ Current canonical normalization algorithm:
 
 1. extract tokens using the Unicode pattern `[\p{L}\p{N}_-]+`
 2. discard every character that is not part of a matched token, including quotes, slashes, commas, colons, and control characters
-3. escape any double quote that remains inside a token by doubling it, though the current token matcher normally strips quotes before tokenization
+3. no additional quote-escaping step is required because the token matcher strips quotes before tokenization
 4. wrap every token in double quotes
 5. join wrapped tokens with ` AND `
 

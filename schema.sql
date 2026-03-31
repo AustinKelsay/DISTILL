@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS activity_events (
   id INTEGER PRIMARY KEY,
   event_type TEXT NOT NULL,
   object_type TEXT NOT NULL,
-  object_id INTEGER NOT NULL,
+  object_id INTEGER,
   session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
   payload_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
