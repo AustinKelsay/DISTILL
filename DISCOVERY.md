@@ -1,5 +1,16 @@
 # Discovery Pass
 
+This file is non-normative discovery evidence.
+
+It preserves machine-specific research about source locations and sample formats. It is not the canonical architecture or data-model spec for Distill.
+
+For canonical behavior and target architecture, use:
+
+- `docs/README.md`
+- `docs/specs/architecture.md`
+- `docs/specs/data-model.md`
+- `docs/specs/ingest-pipeline.md`
+
 Date: 2026-03-30
 
 This discovery pass was run on the current machine to verify whether Distill can ingest local chat history from Codex CLI, Claude Code, and OpenCode using the capture paths the current implementation now supports.

@@ -72,7 +72,7 @@ function insertCapture(
         payload_json
       ) VALUES (?, ?, ?, ?)
     `).run(
-    "captured",
+    "capture_recorded",
     "capture",
     result.id,
     JSON.stringify({

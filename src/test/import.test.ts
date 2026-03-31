@@ -216,6 +216,9 @@ test("runImport bootstraps the database and records discovered captures", () => 
       const sessionCount = db.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number };
       const messageCount = db.prepare("SELECT COUNT(*) AS count FROM messages").get() as { count: number };
       const activityCount = db.prepare("SELECT COUNT(*) AS count FROM activity_events").get() as { count: number };
+      const activityEvents = db
+        .prepare("SELECT event_type FROM activity_events ORDER BY id ASC")
+        .all() as Array<{ event_type: string }>;
 
       assert.equal(sourceCount.count, 3);
       assert.equal(captureCount.count, 2);
@@ -223,6 +226,7 @@ test("runImport bootstraps the database and records discovered captures", () => 
       assert.equal(sessionCount.count, 2);
       assert.ok(messageCount.count >= 2);
       assert.equal(activityCount.count, 2);
+      assert.deepEqual(activityEvents.map((row) => row.event_type), ["capture_recorded", "capture_recorded"]);
       assert.equal(report.sourceSummaries.length, 3);
       assert.equal(report.sourceSummaries.every((summary) => summary.failedCaptures === 0), true);
     } finally {
