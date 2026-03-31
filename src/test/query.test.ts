@@ -163,6 +163,36 @@ test("query layer normalizes punctuation-heavy search input into a safe FTS quer
   });
 });
 
+test("query layer returns no results when search input yields zero FTS tokens", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'codex', 'Codex', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (22, 1, 'session-2c', 'Punctuation only', '/tmp/demo', '2026-03-25T13:40:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (103, 22, 1, 'user', 'analytics regression exists here', 'dd', '2026-03-25T13:40:00Z', 'text', '{}')
+    `).run();
+
+    assert.deepEqual(searchSessions("!!! /// ???"), []);
+
+    distillDb.close();
+  });
+});
+
 test("query layer returns session tags and labels after manual curation", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();

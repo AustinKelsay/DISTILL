@@ -1,578 +1,89 @@
-# Distill Implementation Blueprint
-
-## Core Framing
-
-Distill should have:
-
-- thin source-specific connectors
-- one shared normalization pipeline
-- one standardized local data model
-
-The connectors for Codex CLI, Claude Code, and OpenCode should only do source-specific work:
-
-- detect whether the source exists locally
-- discover relevant captures
-- parse source-specific records
-- map them into Distill's normalized shapes
-
-Everything after that should be shared:
-
-- raw capture storage
-- dedupe
-- normalized session upsert
-- normalized message upsert
-- artifact extraction
-- search indexing
-- tagging
-- labeling
-- export
-
-This is the architectural line that keeps Distill extensible without letting every new source leak provider-specific assumptions into the app.
-
-## System Shape
-
-The MVP implementation should be split into five layers:
-
-1. `source discovery`
-2. `source connectors`
-3. `ingest pipeline`
-4. `storage layer`
-5. `query and export layer`
-
-## Current Scaffold Status
-
-Implemented now:
-
-- Electron main process
-- preload bridge
-- renderer views for sessions, DB Explorer, logs, and settings
-- shared TypeScript source model
-- Codex source detection
-- Claude Code source detection
-- OpenCode source detection
-- shared doctor report
-- CLI doctor command
-- SQLite bootstrap from `schema.sql`
-- raw capture discovery for Codex live and archived sessions
-- raw capture discovery for Claude project sessions
-- virtual capture discovery for OpenCode session exports
-- CLI import command with idempotent capture recording
-- CLI export command
-- raw `capture_records` persistence
-- normalized `sessions` import
-- normalized `messages` import
-- basic artifact extraction for Claude Code image and tool blocks
-- OpenCode artifact extraction for tool, file, and unknown structured parts
-- shared search query over normalized data
-- shared session tags and labels
-- labeled JSONL export
-- persisted source-color preferences in `user_preferences`
-- background sync jobs with operational logs
-- Electron session browser with detail and curation controls
-
-This means the project already has a working source-discovery, raw-capture, and first normalized-ingest spine.
-
-## Shared Distill Shapes
-
-These are the internal shapes every connector should emit.
-
-### `DiscoveredSource`
-
-```ts
-type DiscoveredSource = {
-  kind: "codex" | "claude_code" | "opencode";
-  displayName: string;
-  executablePath?: string;
-  dataRoot?: string;
-  installStatus: "installed" | "not_found" | "partial";
-  checks: Array<{
-    label: string;
-    path: string;
-    exists: boolean;
-    fileCount?: number;
-  }>;
-  metadata: Record<string, unknown>;
-};
-```
-
-### `DiscoveredCapture`
-
-One row per source capture that should be imported.
-
-```ts
-type DiscoveredCapture = {
-  sourceKind: "codex" | "claude_code" | "opencode";
-  captureKind: string;
-  sourcePath: string;
-  externalSessionId?: string;
-  sourceModifiedAt?: string;
-  sourceSizeBytes?: number;
-  metadata: Record<string, unknown>;
-};
-```
-
-### `NormalizedSession`
-
-```ts
-type NormalizedSession = {
-  sourceKind: "codex" | "claude_code" | "opencode";
-  externalSessionId: string;
-  title?: string;
-  projectPath?: string;
-  sourceUrl?: string;
-  model?: string;
-  modelProvider?: string;
-  cliVersion?: string;
-  gitBranch?: string;
-  startedAt?: string;
-  updatedAt?: string;
-  summary?: string;
-  metadata: Record<string, unknown>;
-};
-```
-
-### `NormalizedMessage`
-
-```ts
-type NormalizedMessage = {
-  sourceLineNo: number;
-  externalMessageId?: string;
-  parentExternalMessageId?: string;
-  role: "user" | "assistant" | "system" | "tool";
-  text: string;
-  createdAt?: string;
-  messageKind: "text" | "meta";
-  metadata: Record<string, unknown>;
-};
-```
-
-### `NormalizedArtifact`
-
-```ts
-type NormalizedArtifact = {
-  sourceLineNo: number;
-  externalMessageId?: string;
-  kind: "image" | "file" | "tool_call" | "tool_result" | "raw_json";
-  mimeType?: string;
-  payload: Record<string, unknown>;
-};
-```
-
-### `ParsedCapture`
-
-```ts
-type ParsedCapture = {
-  session: NormalizedSession;
-  messages: NormalizedMessage[];
-  artifacts: NormalizedArtifact[];
-  rawRecords: Array<{
-    lineNo: number;
-    recordType: string;
-    recordTimestamp?: string;
-    providerMessageId?: string;
-    parentProviderMessageId?: string;
-    role?: string;
-    isMeta: boolean;
-    contentText?: string;
-    contentJson: Record<string, unknown>;
-    metadata: Record<string, unknown>;
-  }>;
-};
-```
-
-## Connector Contract
-
-Each connector should implement the same contract:
-
-```ts
-interface SourceConnector {
-  kind: "codex" | "claude_code" | "opencode";
-  detect(): DiscoveredSource;
-  discoverCaptures(): DiscoveredCapture[];
-  snapshotCapture(capture: DiscoveredCapture): {
-    rawText: string;
-    rawSha256: string;
-    sourceModifiedAt?: string;
-    sourceSizeBytes?: number;
-  };
-  parseCapture(
-    capture: DiscoveredCapture,
-    snapshot: {
-      rawText: string;
-      rawSha256: string;
-      sourceModifiedAt?: string;
-      sourceSizeBytes?: number;
-    }
-  ): ParsedCapture;
-}
-```
-
-The contract is intentionally narrow.
-
-Connectors should not:
-
-- talk directly to SQLite
-- decide tag policy
-- decide export policy
-- update search indexes themselves
-
-They only discover and normalize.
-
-In the current codebase this contract is defined as a shared type in `src/connectors/types.ts`, and the responsibility split is the same:
-
-- `detect*Source()`
-- `discover*Captures()`
-- `snapshot*Capture()`
-- `parse*Capture()`
-
-## Shared Ingest Pipeline
-
-This should be the same for every source:
-
-1. detect sources
-2. discover candidate captures
-3. snapshot and fingerprint each capture
-4. skip if `(source_id, source_path, raw_sha256)` already exists
-5. copy raw content into Distill blobs if needed
-6. insert `captures`
-7. parse into raw records, normalized session, normalized messages, and artifacts
-8. insert `capture_records`
-9. upsert `sessions`
-10. upsert `messages`
-11. insert `artifacts`
-12. emit `activity_events`
-13. enqueue `jobs` for indexing and auto-tagging
+# Distill Implementation Map
 
-Operationally, detection and discovery should fail per source rather than failing the whole import run. The importer should surface those failures in the report and logs while allowing healthy connectors to continue.
+This file is informative. It describes the current TypeScript/Electron implementation and how it maps to the canonical specs under `docs/`.
 
-## Dedupe Rules
+Start with the canonical architecture here:
 
-### Capture-Level Dedupe
+- [docs/specs/architecture.md](docs/specs/architecture.md)
 
-Capture dedupe should use:
+## Current Runtime
 
-- source kind
-- source capture path
-- raw SHA-256
+- desktop shell: Electron
+- application code: TypeScript
+- local data layer: SQLite
 
-If those match, the capture is already known.
+## Current Module Map
 
-### Session-Level Dedupe
+### Connectors
 
-Session uniqueness should use:
+- `src/connectors/index.ts`
+- `src/connectors/codex/*`
+- `src/connectors/claude_code/*`
+- `src/connectors/opencode/*`
 
-- source kind
-- external session ID
+These modules implement the current source-specific logic for detect, discover, snapshot, and parse behavior.
 
-### Message-Level Dedupe
+Canonical reference:
 
-Prefer:
+- [docs/specs/connectors.md](docs/specs/connectors.md)
 
-- external message ID when present
+### Import And Storage
 
-Fallback:
+- `src/distill/import.ts`
+- `src/distill/db.ts`
+- `schema.sql`
 
-- session ID
-- role
-- text hash
-- timestamp
+These modules implement the current importer, database helpers, and SQLite schema.
 
-The source files are append-heavy and may be re-imported many times, so idempotency matters more than perfect elegance.
+Canonical references:
 
-## Codex Connector
+- [docs/specs/data-model.md](docs/specs/data-model.md)
+- [docs/specs/ingest-pipeline.md](docs/specs/ingest-pipeline.md)
 
-## Detection
+### Query, Curation, And Export
 
-The Codex connector should verify:
+- `src/distill/query.ts`
+- `src/distill/curation.ts`
+- `src/distill/export.ts`
 
-- `codex` is on `PATH`
-- `~/.codex` exists
-- `~/.codex/sessions` exists when live sessions are available
-- `~/.codex/archived_sessions` exists
+Canonical reference:
 
-## Capture Discovery
+- [docs/specs/search-curation-export.md](docs/specs/search-curation-export.md)
 
-Initial capture set:
+### Operations
 
-- every file in `~/.codex/sessions/**/*.jsonl`
-- every file in `~/.codex/archived_sessions/*.jsonl`
+- `src/distill/jobs.ts`
+- `src/distill/logs.ts`
+- `src/electron/main.ts`
+- `src/electron/preload.ts`
+- `src/renderer/app.ts`
 
-Optional auxiliary metadata sources:
+Canonical reference:
 
-- `~/.codex/session_index.jsonl`
-- `~/.codex/history.jsonl`
+- [docs/specs/activity-and-ops.md](docs/specs/activity-and-ops.md)
 
-## Parsing Rules
+### Tests
 
-Use Codex session JSONL files as the source of truth.
+- `src/test/*.test.ts`
 
-When both live and archived copies exist for the same session, prefer the live session capture.
+Current tests primarily validate current implementation behavior. The canonical contract-test plan lives in [docs/testing/contract-test-matrix.md](docs/testing/contract-test-matrix.md).
 
-Join in `session_index.jsonl` only for:
+## Current Behavior Notes
 
-- title
-- updated timestamp
+The current code already has a solid connector boundary and a working normalized import spine, but several canonical rules are not yet implemented.
 
-Use `history.jsonl` only as optional auxiliary history, not as the primary transcript source.
+Important current gaps:
 
-## Codex Message Extraction
+- raw capture contents are not yet persisted into Distill-owned recoverable storage
+- projection semantics are implemented implicitly rather than as a first-class model
+- `activity_events` coverage is incomplete
+- manual curation is not yet auditable
+- jobs and logs currently carry some behavior that the canonical docs classify as operational rather than authoritative
 
-Keep as transcript candidates:
+See [docs/gaps/current-state-gap-register.md](docs/gaps/current-state-gap-register.md) for the tracked divergence list.
 
-- `response_item.payload.type = "message"` with role `user`
-- `response_item.payload.type = "message"` with role `assistant`
+## How This File Should Be Used
 
-Do not normalize into transcript text:
+Use this file when you need to find the current code quickly.
 
-- `reasoning`
-- `function_call`
-- `function_call_output`
-- `token_count`
-- developer bootstrap messages
-- environment bootstrap messages
-
-Store those as raw records only.
-
-## Codex Artifacts
-
-The first Codex connector can ignore shell snapshots and tool outputs as first-class artifacts, but it should preserve references to them in metadata so they can be promoted later.
-
-## Claude Code Connector
-
-## Detection
-
-The Claude connector should verify:
-
-- `claude` is on `PATH`
-- `~/.claude` exists
-- `~/.claude/projects` exists
-
-## Capture Discovery
-
-Initial capture set:
-
-- every file in `~/.claude/projects/**/*.jsonl`
-
-Optional auxiliary metadata sources:
-
-- `~/.claude/history.jsonl`
-
-## Parsing Rules
-
-Use project session JSONL files as the source of truth.
-
-Use `history.jsonl` only as optional prompt-history metadata.
-
-## Claude Message Extraction
-
-Keep as transcript candidates:
-
-- `user` records with `message.content` text blocks
-- `assistant` records with `message.content` text blocks
-
-Do not normalize into transcript text:
-
-- `queue-operation`
-- `progress`
-- `thinking` blocks
-- `tool_use` blocks
-- `tool_result` blocks
-- meta-only records
-
-## OpenCode Connector
-
-### Detection
-
-The OpenCode connector should verify:
-
-- `opencode` is on `PATH`
-- the OpenCode sqlite database exists
-- the OpenCode config directory exists
-- `~/.local/state/opencode/prompt-history.jsonl` exists when available
-
-### Capture Discovery
-
-Initial capture set:
-
-- one virtual capture per session returned by `opencode db ... --format json`
-
-### Parsing Rules
-
-Use `opencode export <sessionId>` JSON as the source of truth.
-
-Keep visible in the normalized transcript:
-
-- `text`
-- `reasoning`
-- `step-start`
-- `step-finish`
-- `tool`
-- `file`
-- `system` role messages when present
-
-Promote structured payloads to artifacts for:
-
-- `tool`
-- `file`
-- subtask, agent, patch, snapshot, retry, compaction, and unknown future non-text parts
-
-## Claude Artifacts
-
-Promote to artifacts:
-
-- image blocks
-- tool use blocks
-- tool result blocks
-- pasted content references when recoverable
-
-## Storage Responsibilities
-
-The storage layer should expose a small set of operations:
-
-- `upsertSource`
-- `insertCapture`
-- `findCapture`
-- `updateCaptureStatus`
-- `insertCaptureRecords`
-- `upsertSession`
-- `replaceSessionMessages`
-- `replaceSessionArtifacts`
-- `appendActivityEvent`
-- `enqueueJob`
-- `getUserPreference`
-- `setUserPreference`
-
-The current implementation already follows most of this split in `src/distill/db.ts`. Connectors still stay out of SQLite entirely, and the import pipeline remains the only place that coordinates database writes.
-
-## Initial Module Boundaries
-
-The current repository is organized like this:
-
-```text
-src/
-  distill/
-    db.ts
-    db_inspector.ts
-    doctor.ts
-    export.ts
-    fs.ts
-    import.ts
-    jobs.ts
-    jsonl.ts
-    logs.ts
-    paths.ts
-    preferences.ts
-    query.ts
-    settings.ts
-  connectors/
-    codex/
-      detect.ts
-      discover.ts
-      parse.ts
-    claude_code/
-      detect.ts
-      discover.ts
-      parse.ts
-    opencode/
-      common.ts
-      detect.ts
-      discover.ts
-      parse.ts
-      snapshot.ts
-  cli/
-    doctor.ts
-    export.ts
-    import.ts
-  electron/
-    preload.ts
-  renderer/
-  shared/
-  test/
-```
-
-## First CLI Surface
-
-Keep the first CLI very small.
-
-Implemented now:
-
-### `distill doctor`
-
-Shows:
-
-- whether Codex CLI is installed
-- whether Claude Code is installed
-- whether OpenCode is installed
-- whether local data roots exist
-- how many candidate captures were found
-
-### `distill import`
-
-Runs:
-
-- source discovery
-- capture discovery
-- ingest
-- summary output
-
-Not implemented yet:
-
-- `distill sources`
-- maintenance commands beyond `doctor`, `import`, and `export`
-
-## Milestone Order
-
-### Milestone 1
-
-Build:
-
-- SQLite initialization
-- schema application
-- source detection
-- `distill doctor`
-
-### Milestone 2
-
-Build:
-
-- Codex connector
-- ingest of archived session files
-- basic session/message normalization
-
-### Milestone 3
-
-Build:
-
-- Claude connector
-- image/tool artifact extraction
-- shared import pipeline
-
-### Milestone 4
-
-Build:
-
-- FTS indexing
-- search and richer query layer
-- export of labeled sessions
-- operational logs and DB inspection
-
-## Open Decisions
-
-These are the meaningful design choices still open:
-
-- whether to store full raw file contents in blobs always or only for large files
-- whether message replacement should stay full-session rewrite or move to row-level upsert during re-import
-- how much job processing should happen inline versus asynchronously once search/tagging land
-
-The runtime choice is no longer open in practice. The repo is already committed to Electron + TypeScript + SQLite for the current implementation.
-
-## Recommended Immediate Next Step
-
-The runtime and initial project skeleton are chosen and implemented, `distill doctor` works, and `distill import` already persists normalized sessions.
-
-So the next actual coding step is:
-
-1. enrich artifact handling and metadata extraction
-2. add lightweight search filters for source/model/label
-3. grow curation and review workflows beyond the current session/detail/logs surfaces
-4. push more expensive indexing and enrichment work behind the existing job pipeline
+Do not use this file as the authority for target behavior. The canonical behavior specs live under `docs/specs/`.

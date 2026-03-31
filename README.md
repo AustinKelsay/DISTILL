@@ -1,206 +1,40 @@
 # Distill
 
-Distill is a local-first desktop app for collecting, normalizing, indexing, tagging, labeling, and exporting personal LLM chat history.
+Distill is a local-first desktop prototype for collecting, normalizing, inspecting, curating, and exporting local LLM chat history.
 
-Branding note: the final `L` in `DISTILL` stands for `locally`.
+## Implemented Now
 
-The first local sources are:
-
-- OpenAI Codex CLI
-- Claude Code
-- OpenCode
-
-The architectural line is deliberate:
-
-- source-specific connectors stay thin
-- Distill preserves raw captures from disk
-- Distill normalizes everything into one shared local model
-- search, curation, and export operate on standardized data
-
-## Current Status
-
-Implemented now:
-
-- Electron + TypeScript desktop scaffold
-- local source detection for Codex CLI, Claude Code, and OpenCode
-- CLI `doctor` command
-- SQLite bootstrap from `schema.sql`
-- CLI `import` command
-- CLI `export` command
-- idempotent raw capture recording keyed by source path and SHA-256
-- normalized `sessions`, `messages`, and `artifacts` import
-- parser coverage for Codex live and archived sessions, Claude project sessions, and OpenCode session exports
-- basic dashboard query for recent sessions
-- interactive search UI over normalized FTS results
-- session detail query and transcript read model
+- Electron + TypeScript desktop prototype
+- SQLite local database bootstrap from `schema.sql`
+- source detection and capture discovery for Codex CLI, Claude Code, and OpenCode
+- import pipeline that parses local captures into normalized `sessions`, `messages`, `artifacts`, and `capture_records`
+- basic FTS-backed search over normalized session data
+- session detail, artifact inspection, DB explorer, logs, and settings views
 - manual session tags and labels
 - labeled JSONL export
-- Electron UI showing source health, recent sessions, search, session detail, curation controls, artifact inspection, DB Explorer, logs, sync status, export actions, and a settings panel for source-color preferences
-- startup and interval-based background sync jobs for local source refresh
-- persisted UI source-color preferences in `user_preferences`
-- tests for doctor, parsing, import, query, export, logs, jobs, and preferences behavior
+- background sync jobs for local source refresh
+- tests for import, parse, query, export, jobs, logs, preferences, and DB inspection
 
-Not implemented yet:
+## Not Implemented Now
 
-- background work beyond local source sync
-- richer artifact rendering beyond structured metadata and JSON payload inspection
+- Distill-owned recoverable raw capture storage
+- canonical activity auditing across projection, curation, and sync lifecycle
+- auto-tagging
+- embeddings or vector search
+- watched import folders
+- a local capture API
+- a generalized background job system beyond source sync
 
-## Local Storage
+## Canonical Specs
 
-By default Distill writes to:
+The authoritative architecture and planning docs live under [docs/README.md](docs/README.md).
 
-```text
-~/.distill/
-  distill.db
-  blobs/
-  imports/
-  exports/
-```
+Start here:
 
-Path overrides:
+1. [docs/README.md](docs/README.md)
+2. [docs/specs/architecture.md](docs/specs/architecture.md)
+3. [docs/specs/data-model.md](docs/specs/data-model.md)
+4. [docs/specs/ingest-pipeline.md](docs/specs/ingest-pipeline.md)
+5. [docs/gaps/current-state-gap-register.md](docs/gaps/current-state-gap-register.md)
 
-- `DISTILL_HOME`: override the Distill working directory
-- `CODEX_HOME`: override the Codex data root
-- `CLAUDE_HOME`: override the Claude Code data root
-- `OPENCODE_DB_PATH`: override the default OpenCode SQLite path fallback
-- `OPENCODE_CONFIG_DIR`: override the OpenCode config directory
-- `OPENCODE_STATE_DIR`: override the OpenCode state directory
-
-## Supported Sources
-
-Codex CLI:
-
-- detects the `codex` executable on `PATH`
-- prefers live sessions from `~/.codex/sessions`
-- also imports archived sessions from `~/.codex/archived_sessions`
-- uses `session_index.jsonl` and `history.jsonl` as auxiliary metadata only
-
-Claude Code:
-
-- detects the `claude` executable on `PATH`
-- reads project session files from `~/.claude/projects`
-- uses `history.jsonl` as auxiliary metadata only
-
-OpenCode:
-
-- detects the `opencode` executable on `PATH`
-- discovers sessions through `opencode db ... --format json`
-- parses `opencode export <sessionId>` JSON as the transcript source of truth
-- preserves text, reasoning, tool, step, and file trace data in the normalized transcript
-- keeps system-role messages when they appear in exported session data
-
-All connectors preserve raw records and derive user-facing transcript messages from provider-specific local capture formats.
-
-Operational notes:
-
-- `npm run export` defaults to the `train` label if no label is provided.
-- Export metadata and activity logging are recorded atomically after the JSONL file is written.
-- Search tolerates punctuation-heavy input such as quoted text and dashed tokens.
-- The Electron renderer escapes transcript and metadata text before injecting it into the UI.
-- Background sync runs on launch and every two minutes while the app is open.
-- Import failures are isolated per source: a broken connector still surfaces an error in reports and logs without blocking healthy sources.
-
-## Commands
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Build the project:
-
-```bash
-npm run build
-```
-
-Scan local source health:
-
-```bash
-npm run doctor
-```
-
-Import local captures into `~/.distill/distill.db`:
-
-```bash
-npm run import
-```
-
-Export labeled sessions as JSONL:
-
-```bash
-npm run export -- train
-```
-
-Show command help:
-
-```bash
-npm run doctor -- --help
-npm run import -- --help
-npm run export -- --help
-```
-
-Run tests:
-
-```bash
-npm test
-```
-
-Launch the Electron app:
-
-```bash
-npm start
-```
-
-`npm start` runs a fresh import before opening the window, so local source changes show up automatically on launch.
-
-## Import Behavior
-
-The current importer:
-
-1. detects local sources
-2. discovers candidate captures per source
-3. snapshots and hashes each raw capture
-4. skips captures already imported with the same `(source, path, sha256)`
-5. parses raw records
-6. upserts normalized sessions
-7. replaces normalized messages and artifacts for each imported session
-8. supports manual session curation through tags and labels
-9. exports labeled sessions as JSONL
-
-That means re-running `npm run import` is expected and safe. New or changed files import again; previously normalized identical captures are skipped.
-
-If one connector fails during detection or discovery, Distill records that failure and keeps importing the other healthy sources. Snapshot failures are also recorded deterministically so repeated failures update the same failed capture row instead of creating duplicates.
-
-## Project Documents
-
-- [PLAN.md](/Users/plebdev/Desktop/code/DISTILL/PLAN.md): product direction and MVP definition
-- [DISCOVERY.md](/Users/plebdev/Desktop/code/DISTILL/DISCOVERY.md): verified local source locations, sample formats, and parser notes
-- [IMPLEMENTATION.md](/Users/plebdev/Desktop/code/DISTILL/IMPLEMENTATION.md): connector contract, normalized shapes, and ingest blueprint
-- [schema.sql](/Users/plebdev/Desktop/code/DISTILL/schema.sql): current SQLite schema
-
-## Source Tree
-
-```text
-src/
-  cli/
-  connectors/
-    codex/
-    claude_code/
-    opencode/
-  distill/
-  electron/
-  renderer/
-  shared/
-  test/
-static/
-```
-
-## Design Rules
-
-- local-first
-- preserve raw captures
-- normalize into one Distill model
-- keep provider-specific logic inside connectors
-- keep the shared ingest pipeline source-agnostic
-- favor idempotent re-import over fragile diff logic
+The root docs are summaries and pointers. They are not the canonical source of truth.

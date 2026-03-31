@@ -2,6 +2,24 @@ export type SourceKind = "codex" | "claude_code" | "opencode";
 
 export type InstallStatus = "installed" | "not_found" | "partial";
 
+export type CaptureStatus = "captured" | "failed_parse" | "normalized";
+
+export type CaptureContentRef =
+  | {
+    kind: "inline";
+    mediaType: string;
+    text: string;
+    sha256: string;
+    byteSize: number;
+  }
+  | {
+    kind: "blob";
+    mediaType: string;
+    blobPath: string;
+    sha256: string;
+    byteSize: number;
+  };
+
 export type SourcePathCheck = {
   label: string;
   path: string;
@@ -37,21 +55,23 @@ export type DiscoveredCapture = {
 type ImportedCaptureBase = {
   sourcePath: string;
   externalSessionId?: string;
-  rawSha256: string;
 };
 
 export type ImportedCapture =
   | (ImportedCaptureBase & {
+    rawSha256: string;
     status: "imported";
     skipped?: false;
     errorText?: undefined;
   })
   | (ImportedCaptureBase & {
+    rawSha256?: string;
     status: "failed";
     skipped?: false;
     errorText: string;
   })
   | (ImportedCaptureBase & {
+    rawSha256: string;
     status: "skipped";
     skipped: true;
     errorText?: undefined;

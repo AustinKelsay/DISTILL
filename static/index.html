@@ -150,6 +150,11 @@
         border-color: rgba(61, 191, 154, 0.35);
       }
 
+      .topbar-sync[data-state="warning"] {
+        color: var(--warn);
+        border-color: rgba(212, 148, 74, 0.35);
+      }
+
       .topbar-sync[data-state="failed"] {
         color: #d46a4a;
         border-color: rgba(212, 106, 74, 0.35);
@@ -732,6 +737,12 @@
         color: #d46a4a;
         border-color: rgba(212, 106, 74, 0.3);
         background: rgba(212, 106, 74, 0.12);
+      }
+
+      .log-summary-chip.is-warning {
+        color: var(--warn);
+        border-color: rgba(212, 148, 74, 0.3);
+        background: rgba(212, 148, 74, 0.12);
       }
 
       .logs-controls {

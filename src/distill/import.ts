@@ -1,9 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { sourceConnectors } from "../connectors";
 import { CaptureSnapshot, SourceConnector } from "../connectors/types";
-import { getTextSha1, getTextSha256 } from "./fs";
+import { getTextSha1 } from "./fs";
 import {
+  encodeCapturePayload,
   findCapture,
+  insertActivityEvent,
   insertCaptureRecords,
   openDistillDatabase,
   replaceSessionArtifacts,
@@ -14,6 +16,7 @@ import {
   upsertSource
 } from "./db";
 import { getDistillHome } from "./paths";
+import { persistCaptureContent } from "./raw_capture";
 import {
   DiscoveredCapture,
   DiscoveredSource,
@@ -24,11 +27,36 @@ import {
 
 const PARSER_VERSION = "v0";
 
+function insertSyncFailureAuditEvent(
+  db: DatabaseSync,
+  input: {
+    sourceKind: string;
+    stage: "detect" | "discover";
+    sourcePath: string;
+    errorText: string;
+  }
+): void {
+  insertActivityEvent(db, {
+    eventType: "sync_failed",
+    objectType: "sync_job",
+    payload: {
+      sourceKind: input.sourceKind,
+      stage: input.stage,
+      sourcePath: input.sourcePath,
+      errorText: input.errorText,
+      fatal: false,
+      scope: "source"
+    }
+  });
+}
+
 function insertCapture(
   db: DatabaseSync,
   sourceId: number,
   capture: DiscoveredCapture,
-  snapshot: Pick<CaptureSnapshot, "rawSha256" | "sourceModifiedAt" | "sourceSizeBytes">
+  snapshot: Pick<CaptureSnapshot, "rawSha256" | "sourceModifiedAt" | "sourceSizeBytes">,
+  rawBlobPath: string | null,
+  rawPayloadJson: string
 ): number {
   const result = db
     .prepare(`
@@ -40,11 +68,12 @@ function insertCapture(
         source_modified_at,
         source_size_bytes,
         raw_sha256,
+        raw_blob_path,
         raw_payload_json,
         parser_version,
         status,
         captured_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `)
     .get(
@@ -55,32 +84,23 @@ function insertCapture(
       snapshot.sourceModifiedAt ?? capture.sourceModifiedAt ?? null,
       snapshot.sourceSizeBytes ?? capture.sourceSizeBytes ?? null,
       snapshot.rawSha256,
-      JSON.stringify({
-        sourceKind: capture.sourceKind,
-        metadata: capture.metadata
-      }),
+      rawBlobPath,
+      rawPayloadJson,
       PARSER_VERSION,
       "captured",
       new Date().toISOString()
     ) as { id: number };
 
-  db.prepare(`
-      INSERT INTO activity_events (
-        event_type,
-        object_type,
-        object_id,
-        payload_json
-      ) VALUES (?, ?, ?, ?)
-    `).run(
-    "captured",
-    "capture",
-    result.id,
-    JSON.stringify({
+  insertActivityEvent(db, {
+    eventType: "capture_recorded",
+    objectType: "capture",
+    objectId: result.id,
+    payload: {
       sourceKind: capture.sourceKind,
       sourcePath: capture.sourcePath,
       externalSessionId: capture.externalSessionId ?? null
-    })
-  );
+    }
+  });
 
   return result.id;
 }
@@ -111,29 +131,20 @@ function importSourceCaptures(
       snapshot = connector.snapshotCapture(capture);
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
-      const legacyRawSha256 = getTextSha256(
-        `snapshot-failure:${capture.sourcePath}:${capture.sourceModifiedAt ?? ""}:${errorText}`
-      );
-      const failedSnapshot = {
-        rawSha256: getTextSha256(JSON.stringify([
-          "snapshot-failure",
-          capture.sourcePath,
-          capture.sourceModifiedAt ?? null,
-          capture.sourceSizeBytes ?? null
-        ])),
-        sourceModifiedAt: capture.sourceModifiedAt,
-        sourceSizeBytes: capture.sourceSizeBytes
-      };
-      const legacyFailedCapture = findCapture(db, sourceId, capture.sourcePath, legacyRawSha256);
-      const existingFailedCapture =
-        legacyFailedCapture
-        ?? findCapture(db, sourceId, capture.sourcePath, failedSnapshot.rawSha256);
-      const captureId = existingFailedCapture?.id ?? insertCapture(db, sourceId, capture, failedSnapshot);
-      updateCaptureFailure(db, captureId, errorText);
+      insertActivityEvent(db, {
+        eventType: "capture_failed",
+        objectType: "capture",
+        payload: {
+          sourceKind: source.kind,
+          sourcePath: capture.sourcePath,
+          externalSessionId: capture.externalSessionId ?? null,
+          stage: "snapshot",
+          errorText
+        }
+      });
       imported.push({
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
-        rawSha256: legacyFailedCapture ? legacyRawSha256 : failedSnapshot.rawSha256,
         skipped: false,
         status: "failed",
         errorText
@@ -149,7 +160,7 @@ function importSourceCaptures(
 
     const existingCapture = findCapture(db, sourceId, capture.sourcePath, snapshot.rawSha256);
 
-    if (existingCapture && existingCapture.status === "normalized") {
+    if (existingCapture && (existingCapture.status === "normalized" || existingCapture.status === "failed_parse")) {
       skippedCaptures += 1;
       imported.push({
         sourcePath: capture.sourcePath,
@@ -161,9 +172,37 @@ function importSourceCaptures(
       continue;
     }
 
-    const captureId = existingCapture?.id ?? insertCapture(db, sourceId, capture, snapshot);
-
+    let captureId: number | undefined;
+    let failureStage: "persistence" | "parse" = "persistence";
     try {
+      const contentRef = persistCaptureContent(capture, snapshot);
+      const rawBlobPath = contentRef.kind === "blob" ? contentRef.blobPath : null;
+      const rawPayloadJson = encodeCapturePayload(capture.sourceKind, capture.metadata, contentRef);
+
+      if (existingCapture) {
+        captureId = existingCapture.id;
+        db.prepare(`
+          UPDATE captures
+          SET source_modified_at = ?,
+              source_size_bytes = ?,
+              raw_blob_path = ?,
+              raw_payload_json = ?,
+              error_text = NULL,
+              parser_version = ?
+          WHERE id = ?
+        `).run(
+          snapshot.sourceModifiedAt ?? capture.sourceModifiedAt ?? null,
+          snapshot.sourceSizeBytes ?? capture.sourceSizeBytes ?? contentRef.byteSize,
+          rawBlobPath,
+          rawPayloadJson,
+          PARSER_VERSION,
+          captureId
+        );
+      } else {
+        captureId = insertCapture(db, sourceId, capture, snapshot, rawBlobPath, rawPayloadJson);
+      }
+
+      failureStage = "parse";
       const parsedCapture = connector.parseCapture(capture, snapshot);
       let transactionOpen = false;
 
@@ -188,6 +227,20 @@ function importSourceCaptures(
         );
         replaceSessionArtifacts(db, sessionId, parsedCapture.artifacts, captureRecordIdsByLine);
         updateCaptureStatus(db, captureId, "normalized");
+        insertActivityEvent(db, {
+          eventType: "projection_replaced",
+          objectType: "session",
+          objectId: sessionId,
+          sessionId,
+          payload: {
+            captureId,
+            sourceKind: source.kind,
+            sourcePath: capture.sourcePath,
+            externalSessionId: capture.externalSessionId ?? null,
+            messageCount: parsedCapture.messages.length,
+            artifactCount: parsedCapture.artifacts.length
+          }
+        });
         db.exec("COMMIT");
         transactionOpen = false;
       } catch (error) {
@@ -203,7 +256,21 @@ function importSourceCaptures(
       }
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
-      updateCaptureFailure(db, captureId, errorText);
+      if (failureStage === "parse" && captureId !== undefined) {
+        updateCaptureFailure(db, captureId, errorText);
+      }
+      insertActivityEvent(db, {
+        eventType: "capture_failed",
+        objectType: "capture",
+        objectId: captureId,
+        payload: {
+          sourceKind: source.kind,
+          sourcePath: capture.sourcePath,
+          externalSessionId: capture.externalSessionId ?? null,
+          stage: failureStage,
+          errorText
+        }
+      });
       imported.push({
         sourcePath: capture.sourcePath,
         externalSessionId: capture.externalSessionId,
@@ -254,6 +321,12 @@ export function runImport(): ImportReport {
         source = connector.detect();
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
+        insertSyncFailureAuditEvent(distillDb.db, {
+          sourceKind: connector.kind,
+          stage: "detect",
+          sourcePath: connector.kind,
+          errorText
+        });
         console.warn(`[import] Skipping ${connector.kind} detection: ${errorText}`);
         sourceSummaries.push({
           kind: connector.kind,
@@ -280,6 +353,12 @@ export function runImport(): ImportReport {
         );
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
+        insertSyncFailureAuditEvent(distillDb.db, {
+          sourceKind: source.kind,
+          stage: "discover",
+          sourcePath: source.dataRoot ?? connector.kind,
+          errorText
+        });
         console.warn(`[import] Skipping ${connector.kind} discovery: ${errorText}`);
         sourceSummaries.push({
           kind: source.kind,
