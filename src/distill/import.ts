@@ -149,35 +149,37 @@ function importSourceCaptures(
       continue;
     }
 
-    const contentRef = persistCaptureContent(capture, snapshot);
-    const rawBlobPath = contentRef.kind === "blob" ? contentRef.blobPath : null;
-    const rawPayloadJson = encodeCapturePayload(capture.sourceKind, capture.metadata, contentRef);
-
-    let captureId: number;
-    if (existingCapture) {
-      captureId = existingCapture.id;
-      db.prepare(`
-        UPDATE captures
-        SET source_modified_at = ?,
-            source_size_bytes = ?,
-            raw_blob_path = ?,
-            raw_payload_json = ?,
-            error_text = NULL,
-            parser_version = ?
-        WHERE id = ?
-      `).run(
-        snapshot.sourceModifiedAt ?? capture.sourceModifiedAt ?? null,
-        snapshot.sourceSizeBytes ?? capture.sourceSizeBytes ?? contentRef.byteSize,
-        rawBlobPath,
-        rawPayloadJson,
-        PARSER_VERSION,
-        captureId
-      );
-    } else {
-      captureId = insertCapture(db, sourceId, capture, snapshot, rawBlobPath, rawPayloadJson);
-    }
-
+    let captureId: number | undefined;
+    let failureStage: "persistence" | "parse" = "persistence";
     try {
+      const contentRef = persistCaptureContent(capture, snapshot);
+      const rawBlobPath = contentRef.kind === "blob" ? contentRef.blobPath : null;
+      const rawPayloadJson = encodeCapturePayload(capture.sourceKind, capture.metadata, contentRef);
+
+      if (existingCapture) {
+        captureId = existingCapture.id;
+        db.prepare(`
+          UPDATE captures
+          SET source_modified_at = ?,
+              source_size_bytes = ?,
+              raw_blob_path = ?,
+              raw_payload_json = ?,
+              error_text = NULL,
+              parser_version = ?
+          WHERE id = ?
+        `).run(
+          snapshot.sourceModifiedAt ?? capture.sourceModifiedAt ?? null,
+          snapshot.sourceSizeBytes ?? capture.sourceSizeBytes ?? contentRef.byteSize,
+          rawBlobPath,
+          rawPayloadJson,
+          PARSER_VERSION,
+          captureId
+        );
+      } else {
+        captureId = insertCapture(db, sourceId, capture, snapshot, rawBlobPath, rawPayloadJson);
+      }
+
+      failureStage = "parse";
       const parsedCapture = connector.parseCapture(capture, snapshot);
       let transactionOpen = false;
 
@@ -231,7 +233,9 @@ function importSourceCaptures(
       }
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
-      updateCaptureFailure(db, captureId, errorText);
+      if (captureId !== undefined) {
+        updateCaptureFailure(db, captureId, errorText);
+      }
       insertActivityEvent(db, {
         eventType: "capture_failed",
         objectType: "capture",
@@ -240,7 +244,7 @@ function importSourceCaptures(
           sourceKind: source.kind,
           sourcePath: capture.sourcePath,
           externalSessionId: capture.externalSessionId ?? null,
-          stage: "parse",
+          stage: failureStage,
           errorText
         }
       });

@@ -123,6 +123,13 @@ Current default storage policy:
 
 The exact size threshold is implementation-defined and must be documented in the implementation-specific mapping when introduced.
 
+If Distill-owned raw persistence fails after raw content has been read:
+
+- emit `capture_failed`
+- leave existing projections unchanged
+- continue importing later captures
+- do not insert a new canonical capture row unless raw persistence succeeds
+
 ## 4. Dedupe
 
 Exact capture dedupe occurs before a new canonical capture row is inserted.

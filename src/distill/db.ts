@@ -49,56 +49,67 @@ function migrateLegacySchema(db: DatabaseSync): void {
     .prepare("PRAGMA table_info(activity_events)")
     .all() as TableInfoRow[];
   const objectIdColumn = activityEventColumns.find((column) => column.name === "object_id");
+  const needsActivityEventMigration = Boolean(objectIdColumn && objectIdColumn.notnull !== 0);
+  const hasLegacyFailedCaptureStatus = Boolean(
+    db.prepare("SELECT 1 FROM captures WHERE status = 'failed' LIMIT 1").get() as { 1: number } | undefined
+  );
 
-  if (!objectIdColumn || objectIdColumn.notnull === 0) {
+  if (!needsActivityEventMigration && !hasLegacyFailedCaptureStatus) {
     return;
   }
 
   db.exec("BEGIN");
   try {
-    // Normalize legacy sentinel values while making snapshot-stage failures nullable.
-    db.exec("DROP TABLE IF EXISTS activity_events__new");
-    db.exec(`
-      CREATE TABLE activity_events__new (
-        id INTEGER PRIMARY KEY,
-        event_type TEXT NOT NULL,
-        object_type TEXT NOT NULL,
-        object_id INTEGER,
-        session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
-        payload_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    db.exec(`
-      INSERT INTO activity_events__new (
-        id,
-        event_type,
-        object_type,
-        object_id,
-        session_id,
-        payload_json,
-        created_at
-      )
-      SELECT
-        id,
-        event_type,
-        object_type,
-        NULLIF(object_id, 0),
-        session_id,
-        payload_json,
-        created_at
-      FROM activity_events
-    `);
-    db.exec("DROP TABLE activity_events");
-    db.exec("ALTER TABLE activity_events__new RENAME TO activity_events");
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_activity_events_created
-        ON activity_events(created_at DESC)
-    `);
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_activity_events_session
-        ON activity_events(session_id, created_at DESC)
-    `);
+    if (hasLegacyFailedCaptureStatus) {
+      db.exec("UPDATE captures SET status = 'failed_parse' WHERE status = 'failed'");
+    }
+
+    if (needsActivityEventMigration) {
+      // Normalize legacy sentinel values while making snapshot-stage failures nullable.
+      db.exec("DROP TABLE IF EXISTS activity_events__new");
+      db.exec(`
+        CREATE TABLE activity_events__new (
+          id INTEGER PRIMARY KEY,
+          event_type TEXT NOT NULL,
+          object_type TEXT NOT NULL,
+          object_id INTEGER,
+          session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      db.exec(`
+        INSERT INTO activity_events__new (
+          id,
+          event_type,
+          object_type,
+          object_id,
+          session_id,
+          payload_json,
+          created_at
+        )
+        SELECT
+          id,
+          event_type,
+          object_type,
+          NULLIF(object_id, 0),
+          session_id,
+          payload_json,
+          created_at
+        FROM activity_events
+      `);
+      db.exec("DROP TABLE activity_events");
+      db.exec("ALTER TABLE activity_events__new RENAME TO activity_events");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_activity_events_created
+          ON activity_events(created_at DESC)
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_activity_events_session
+          ON activity_events(session_id, created_at DESC)
+      `);
+    }
+
     db.exec("COMMIT");
   } catch (error) {
     try {

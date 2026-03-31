@@ -32,7 +32,18 @@ export function getInlineCaptureMaxBytes(): number {
 }
 
 export function resolveCaptureBlobPath(blobPath: string): string {
-  return path.join(getDistillHome(), "blobs", blobPath);
+  if (path.isAbsolute(blobPath)) {
+    throw new Error(`Capture blobPath must be relative to Distill blobs: ${blobPath}`);
+  }
+
+  const blobsRoot = path.resolve(getDistillHome(), "blobs");
+  const resolvedPath = path.resolve(blobsRoot, path.normalize(blobPath));
+  const relativePath = path.relative(blobsRoot, resolvedPath);
+  if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`Capture blobPath escapes the Distill blob root: ${blobPath}`);
+  }
+
+  return resolvedPath;
 }
 
 export function persistCaptureContent(

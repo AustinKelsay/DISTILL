@@ -6,9 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { sourceConnectors } from "../connectors";
 import { SourceConnector } from "../connectors/types";
-import { getCaptureContentRef, readCaptureText } from "../distill/db";
+import { getCaptureContentRef, openDistillDatabase, readCaptureText } from "../distill/db";
 import { ensureDirectory } from "../distill/fs";
-import { getInlineCaptureMaxBytes, resolveCaptureBlobPath } from "../distill/raw_capture";
+import { getInlineCaptureMaxBytes, readCaptureContentText, resolveCaptureBlobPath } from "../distill/raw_capture";
 import { runImport } from "../distill/import";
 import { DiscoveredCapture } from "../shared/types";
 
@@ -276,6 +276,23 @@ test("runImport persists recoverable inline raw content for file-backed captures
     } finally {
       db.close();
     }
+  });
+});
+
+test("resolveCaptureBlobPath rejects paths outside the Distill blob root", () => {
+  withTempEnv(() => {
+    assert.throws(() => resolveCaptureBlobPath("../escape.json"), /blob root|must be relative/i);
+    assert.throws(() => resolveCaptureBlobPath("/tmp/escape.json"), /blob root|must be relative/i);
+    assert.throws(
+      () => readCaptureContentText({
+        kind: "blob",
+        mediaType: "application/json; charset=utf-8",
+        blobPath: "../escape.json",
+        sha256: "abc123",
+        byteSize: 1
+      }),
+      /blob root|must be relative/i
+    );
   });
 });
 
@@ -710,6 +727,146 @@ test("runImport imports large OpenCode exports even when pipe stdout truncates",
   });
 });
 
+test("runImport audits raw persistence failures and continues with later captures", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const largeText = "B".repeat(getInlineCaptureMaxBytes() + 4_096);
+    const largeExport = JSON.stringify({
+      info: {
+        id: "ses_blob_fail",
+        directory: "/tmp/opencode-demo",
+        title: "Blob persistence failure",
+        version: "1.3.3",
+        time: { created: 1774543194067, updated: 1774543475213 }
+      },
+      messages: [
+        {
+          info: {
+            id: "msg_user_large",
+            role: "user",
+            time: { created: 1774543194080 },
+            model: { providerID: "openai", modelID: "gpt-5.4" }
+          },
+          parts: [{ id: "part_user_large", type: "text", text: "Force blob persistence to fail" }]
+        },
+        {
+          info: {
+            id: "msg_assistant_large",
+            role: "assistant",
+            parentID: "msg_user_large",
+            time: { created: 1774543194090 },
+            providerID: "openai",
+            modelID: "gpt-5.4"
+          },
+          parts: [{ id: "part_large_text", type: "text", text: largeText }]
+        }
+      ]
+    });
+    const smallExport = JSON.stringify({
+      info: {
+        id: "ses_small_ok",
+        directory: "/tmp/opencode-demo",
+        title: "Inline persistence success",
+        version: "1.3.3",
+        time: { created: 1774543195067, updated: 1774543476213 }
+      },
+      messages: [
+        {
+          info: {
+            id: "msg_user_small",
+            role: "user",
+            time: { created: 1774543195080 },
+            model: { providerID: "openai", modelID: "gpt-5.4" }
+          },
+          parts: [{ id: "part_user_small", type: "text", text: "Keep importing after the blob write fails" }]
+        },
+        {
+          info: {
+            id: "msg_assistant_small",
+            role: "assistant",
+            parentID: "msg_user_small",
+            time: { created: 1774543195090 },
+            providerID: "openai",
+            modelID: "gpt-5.4"
+          },
+          parts: [{ id: "part_small_text", type: "text", text: "The smaller capture still imports." }]
+        }
+      ]
+    });
+
+    writeFakeOpenCodeExecutable(
+      root,
+      [
+        {
+          id: "ses_blob_fail",
+          title: "Blob persistence failure",
+          directory: "/tmp/opencode-demo",
+          version: "1.3.3",
+          time_created: 1774543194067,
+          time_updated: 1774543475213,
+          time_archived: null,
+          share_url: null
+        },
+        {
+          id: "ses_small_ok",
+          title: "Inline persistence success",
+          directory: "/tmp/opencode-demo",
+          version: "1.3.3",
+          time_created: 1774543195067,
+          time_updated: 1774543476213,
+          time_archived: null,
+          share_url: null
+        }
+      ],
+      {
+        ses_blob_fail: largeExport,
+        ses_small_ok: smallExport
+      }
+    );
+
+    const blobRoot = path.join(process.env.DISTILL_HOME ?? path.join(root, ".distill"), "blobs");
+    ensureDirectory(blobRoot);
+    fs.writeFileSync(path.join(blobRoot, "captures"), "block blob subdirectories");
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const opencodeSummary = report.sourceSummaries.find((summary) => summary.kind === "opencode");
+    const captureRows = db
+      .prepare("SELECT external_session_id FROM captures WHERE external_session_id LIKE 'ses_%' ORDER BY external_session_id ASC")
+      .all() as Array<{ external_session_id: string | null }>;
+    const sessionRows = db
+      .prepare("SELECT external_session_id FROM sessions WHERE external_session_id LIKE 'ses_%' ORDER BY external_session_id ASC")
+      .all() as Array<{ external_session_id: string }>;
+    const failureEvents = db
+      .prepare(`
+        SELECT object_id, payload_json
+        FROM activity_events
+        WHERE event_type = 'capture_failed'
+        ORDER BY id ASC
+      `)
+      .all() as Array<{ object_id: number | null; payload_json: string }>;
+    const failedCapture = report.captures.find((capture) => capture.externalSessionId === "ses_blob_fail");
+    const importedCapture = report.captures.find((capture) => capture.externalSessionId === "ses_small_ok");
+    const persistenceFailureEvent = failureEvents.find((event) => /"externalSessionId":"ses_blob_fail"/.test(event.payload_json));
+
+    assert.equal(opencodeSummary?.discoveredCaptures, 2);
+    assert.equal(opencodeSummary?.importedCaptures, 1);
+    assert.equal(opencodeSummary?.failedCaptures, 1);
+    assert.deepEqual(captureRows.map((row) => row.external_session_id), ["ses_small_ok"]);
+    assert.deepEqual(sessionRows.map((row) => row.external_session_id), ["ses_small_ok"]);
+    assert.equal(failedCapture?.status, "failed");
+    assert.ok(failedCapture?.rawSha256);
+    assert.match(failedCapture?.errorText ?? "", /ENOTDIR|EEXIST|not a directory|file exists/i);
+    assert.equal(importedCapture?.status, "imported");
+    assert.ok(persistenceFailureEvent);
+    assert.equal(persistenceFailureEvent?.object_id, null);
+    assert.match(persistenceFailureEvent?.payload_json ?? "", /"stage":"persistence"/);
+
+    db.close();
+  });
+});
+
 test("runImport rolls back partial normalization writes when session replacement fails", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
@@ -1119,5 +1276,71 @@ test("runImport migrates legacy activity events away from zero object ids", () =
     } finally {
       sourceConnectors[connectorIndex] = originalConnector;
     }
+  });
+});
+
+test("openDistillDatabase migrates legacy failed capture statuses to failed_parse", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const databasePath = path.join(process.env.DISTILL_HOME ?? path.join(root, ".distill"), "distill.db");
+    ensureDirectory(path.dirname(databasePath));
+
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(fs.readFileSync(path.resolve(process.cwd(), "schema.sql"), "utf8"));
+    legacyDb
+      .prepare(`
+        INSERT INTO sources (id, kind, display_name, install_status, metadata_json)
+        VALUES (1, 'codex', 'Codex', 'installed', '{}')
+      `)
+      .run();
+    legacyDb
+      .prepare(`
+        INSERT INTO captures (
+          source_id,
+          capture_kind,
+          external_session_id,
+          source_path,
+          raw_sha256,
+          raw_payload_json,
+          parser_version,
+          status,
+          captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        1,
+        "session_file",
+        "legacy-failed",
+        "/tmp/legacy-failed.jsonl",
+        "abc123",
+        JSON.stringify({
+          sourceKind: "codex",
+          metadata: {},
+          contentRef: {
+            kind: "inline",
+            mediaType: "application/x-ndjson; charset=utf-8",
+            text: "{}",
+            sha256: "abc123",
+            byteSize: 2
+          }
+        }),
+        "legacy-v1",
+        "failed",
+        "2026-03-25T00:00:00.000Z"
+      );
+    legacyDb.close();
+
+    const distillDb = openDistillDatabase();
+    distillDb.close();
+
+    const db = new DatabaseSync(databasePath);
+    const capture = db
+      .prepare("SELECT status FROM captures WHERE external_session_id = ?")
+      .get("legacy-failed") as { status: string };
+
+    assert.equal(capture.status, "failed_parse");
+
+    db.close();
   });
 });

@@ -29,6 +29,7 @@ Current canonical normalization algorithm:
 3. no additional quote-escaping step is required because the token matcher strips quotes before tokenization
 4. wrap every token in double quotes
 5. join wrapped tokens with ` AND `
+6. if zero tokens are extracted, do not issue an FTS query and return no search results
 
 Examples:
 
@@ -40,6 +41,9 @@ Examples:
 
 - input: `("quoted") AND weird`
 - normalized query: `"quoted" AND "AND" AND "weird"`
+
+- input: `!!! /// ???`
+- normalized query: no tokens extracted, so no FTS query is issued and no results are returned
 
 ### Session List And Detail Read Model
 
@@ -60,8 +64,7 @@ Session detail must support:
 
 Current normative behavior:
 
-- manual only
-- session-level only
+- manual, session-level only
 - stored with origin as a `CurationOrigin` value plus the assignment timestamp
 - cheap and reversible
 
@@ -79,8 +82,7 @@ Starter tag categories remain guidance, not a closed taxonomy:
 
 Current normative behavior:
 
-- manual only
-- session-level only
+- manual, session-level only
 - stronger than tags because labels decide export inclusion and review-routing behavior, while tags remain descriptive only
 - intended to drive export and review flows
 - labels take precedence over tags in conflict resolution
