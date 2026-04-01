@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+import { deriveSessionWorkflowState } from "./curation";
 import { openDistillDatabase } from "./db";
 import { buildDoctorReport } from "./doctor";
 import {
@@ -86,6 +88,11 @@ type SearchHitRow = {
   project_path: string | null;
   role: string | null;
   text: string;
+};
+
+type SessionLabelLookupRow = {
+  session_id: number;
+  name: string;
 };
 
 function cleanExcerpt(text: string | null | undefined, maxLength: number): string | undefined {
@@ -243,11 +250,38 @@ function mapArtifact(row: SessionArtifactRow): SessionArtifact {
   };
 }
 
-export function listRecentSessions(limit = 24): SessionListItem[] {
+function loadSessionLabels(db: DatabaseSync, sessionIds: number[]): Map<number, string[]> {
+  const labelsBySessionId = new Map<number, string[]>();
+
+  for (const sessionId of sessionIds) {
+    labelsBySessionId.set(sessionId, []);
+  }
+
+  if (sessionIds.length === 0) {
+    return labelsBySessionId;
+  }
+
+  const placeholders = sessionIds.map(() => "?").join(", ");
+  const rows = db.prepare(`
+    SELECT la.object_id AS session_id, l.name
+    FROM label_assignments la
+    JOIN labels l ON l.id = la.label_id
+    WHERE la.object_type = 'session'
+    AND la.object_id IN (${placeholders})
+    ORDER BY la.object_id ASC, l.name ASC
+  `).all(...sessionIds) as SessionLabelLookupRow[];
+
+  for (const row of rows) {
+    labelsBySessionId.get(row.session_id)?.push(row.name);
+  }
+
+  return labelsBySessionId;
+}
+
+export function listRecentSessions(limit?: number): SessionListItem[] {
   const distillDb = openDistillDatabase();
   try {
-    const rows = distillDb.db
-      .prepare(`
+    const statement = distillDb.db.prepare(`
         SELECT
           s.id,
           so.kind AS source_kind,
@@ -278,9 +312,18 @@ export function listRecentSessions(limit = 24): SessionListItem[] {
         FROM sessions s
         JOIN sources so ON so.id = s.source_id
         ORDER BY COALESCE(s.updated_at, s.updated_recorded_at) DESC
-        LIMIT ?
-      `)
-      .all(limit) as SessionListRow[];
+        ${typeof limit === "number" ? "LIMIT ?" : ""}
+      `);
+
+    const rows = (
+      typeof limit === "number"
+        ? statement.all(limit)
+        : statement.all()
+    ) as SessionListRow[];
+    const labelsBySessionId = loadSessionLabels(
+      distillDb.db,
+      rows.map((row) => row.id)
+    );
 
     return rows.map((row) => ({
       id: row.id,
@@ -291,6 +334,8 @@ export function listRecentSessions(limit = 24): SessionListItem[] {
       messageCount: row.message_count,
       model: row.model ?? undefined,
       gitBranch: row.git_branch ?? undefined,
+      labels: labelsBySessionId.get(row.id) ?? [],
+      workflowState: deriveSessionWorkflowState(labelsBySessionId.get(row.id) ?? []),
       preview: deriveSessionPreview(row)
     }));
   } finally {
@@ -451,7 +496,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
   }
 }
 
-export function searchSessions(query: string, limit = 20): SearchResult[] {
+export function searchSessions(query: string, limit?: number): SearchResult[] {
   const normalizedQuery = normalizeSearchQuery(query);
   if (!normalizedQuery) {
     return [];
@@ -459,6 +504,11 @@ export function searchSessions(query: string, limit = 20): SearchResult[] {
 
   const distillDb = openDistillDatabase();
   try {
+    const maxResults =
+      limit
+      ?? ((distillDb.db.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count);
+    const hitLimit = Math.max(maxResults * 8, 20);
+
     const hitRows = distillDb.db
       .prepare(`
         SELECT
@@ -471,14 +521,14 @@ export function searchSessions(query: string, limit = 20): SearchResult[] {
         WHERE message_fts MATCH ?
         LIMIT ?
       `)
-      .all(normalizedQuery, limit * 8) as SearchHitRow[];
+      .all(normalizedQuery, hitLimit) as SearchHitRow[];
 
     const firstHitBySession = new Map<number, SearchHitRow>();
     for (const row of hitRows) {
       if (!firstHitBySession.has(row.session_id)) {
         firstHitBySession.set(row.session_id, row);
       }
-      if (firstHitBySession.size >= limit) {
+      if (firstHitBySession.size >= maxResults) {
         break;
       }
     }
@@ -513,6 +563,7 @@ export function searchSessions(query: string, limit = 20): SearchResult[] {
       .all(...sessionIds) as SearchRow[];
 
     const sessionRowById = new Map(sessionRows.map((row) => [row.session_id, row]));
+    const labelsBySessionId = loadSessionLabels(distillDb.db, sessionIds);
 
     return sessionIds.flatMap((sessionId) => {
       const row = sessionRowById.get(sessionId);
@@ -521,6 +572,8 @@ export function searchSessions(query: string, limit = 20): SearchResult[] {
         return [];
       }
 
+      const labels = labelsBySessionId.get(sessionId) ?? [];
+
       return [
         {
           sessionId: row.session_id,
@@ -528,6 +581,8 @@ export function searchSessions(query: string, limit = 20): SearchResult[] {
           title: row.title?.trim() || cleanExcerpt(row.first_user_text, 160) || "Untitled session",
           projectPath: row.project_path ?? undefined,
           updatedAt: row.updated_at ?? undefined,
+          labels,
+          workflowState: deriveSessionWorkflowState(labels),
           snippet: cleanExcerpt(hit.text, 280) ?? ""
         }
       ];

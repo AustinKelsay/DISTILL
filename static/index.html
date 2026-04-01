@@ -616,6 +616,27 @@
         border-bottom: 1px solid var(--line);
       }
 
+      .session-filter-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(58, 58, 62, 0.5);
+        background: rgba(30, 30, 34, 0.55);
+      }
+
+      .session-filter-count {
+        color: var(--dim);
+        margin-left: 6px;
+      }
+
+      .sidebar-empty {
+        padding: 18px 16px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
       .session-item {
         padding: 14px 16px;
         border-bottom: 1px solid rgba(58, 58, 62, 0.5);
@@ -686,6 +707,10 @@
       .badge-source-opencode { background: var(--source-opencode-bg, rgba(140, 100, 210, 0.14)); color: var(--source-opencode, #a88cd4); }
       .badge-source-codex { background: var(--source-codex-bg, rgba(61, 191, 154, 0.14)); color: var(--source-codex, #3dbf9a); }
       .badge-model { background: rgba(58, 58, 62, 0.5); color: var(--muted); }
+      .badge-workflow-review { background: rgba(212, 148, 74, 0.14); color: var(--warn); }
+      .badge-workflow-train { background: rgba(61, 191, 154, 0.14); color: var(--accent); }
+      .badge-workflow-holdout { background: rgba(120, 176, 255, 0.14); color: #8fbaff; }
+      .badge-workflow-favorite { background: rgba(230, 187, 92, 0.14); color: #e6bb5c; }
 
       /* ── Detail pane ── */
       .detail {

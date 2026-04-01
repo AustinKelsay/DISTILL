@@ -157,9 +157,18 @@ export type ImportFailureEntry = {
   errorText: string;
 };
 
+export type DatasetExportTarget = "train" | "holdout";
+
+export type SessionWorkflowState =
+  | "needs_review"
+  | "train_ready"
+  | "holdout_ready"
+  | "favorite"
+  | "neutral";
+
 export type ExportReport = {
   exportedAt: string;
-  label: string;
+  dataset: DatasetExportTarget;
   outputPath: string;
   recordCount: number;
 };
@@ -239,7 +248,7 @@ export type LogEntry = {
   details?: {
     reason?: string;
     outputPath?: string;
-    label?: string;
+    dataset?: string;
     sourceSummaries?: ImportSourceSummary[];
     failedEntries?: ImportFailureEntry[];
   };
@@ -419,6 +428,8 @@ export type SessionListItem = {
   messageCount: number;
   model?: string;
   gitBranch?: string;
+  labels: string[];
+  workflowState: SessionWorkflowState;
   preview?: string;
 };
 
@@ -433,6 +444,8 @@ export type SearchResult = {
   title: string;
   projectPath?: string;
   updatedAt?: string;
+  labels: string[];
+  workflowState: SessionWorkflowState;
   snippet: string;
 };
 

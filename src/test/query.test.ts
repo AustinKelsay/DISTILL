@@ -274,11 +274,109 @@ test("query layer returns session tags and labels after manual curation", () => 
     addSessionTag(30, "distill");
     toggleSessionLabel(30, "train");
 
+    const sessions = listRecentSessions();
     const detail = getSessionDetail(30);
+    const session = sessions.find((entry) => entry.id === 30);
+
+    assert.deepEqual(session?.labels, ["train"]);
+    assert.equal(session?.workflowState, "train_ready");
     assert.equal(detail?.tags.length, 1);
     assert.equal(detail?.tags[0]?.name, "distill");
     assert.equal(detail?.labels.length, 1);
     assert.equal(detail?.labels[0]?.name, "train");
+  });
+});
+
+test("query layer returns the full session corpus and derives workflow states from labels", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'claude_code', 'Claude Code', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    const insertSession = db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (?, 1, ?, ?, '/tmp/demo', ?, 1, 1, '{}')
+    `);
+    const insertMessage = db.prepare(`
+      INSERT INTO messages (
+        session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES (?, 1, 'user', ?, ?, ?, 'text', '{}')
+    `);
+
+    for (let index = 0; index < 30; index += 1) {
+      const sessionId = 100 + index;
+      const updatedAt = `2026-03-25T15:${String(index).padStart(2, "0")}:00Z`;
+      insertSession.run(sessionId, `session-${sessionId}`, `Session ${sessionId}`, updatedAt);
+      insertMessage.run(sessionId, `Message for session ${sessionId}`, `hash-${sessionId}`, updatedAt);
+    }
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+    toggleSessionLabel(100, "train");
+    toggleSessionLabel(101, "holdout");
+    toggleSessionLabel(102, "train");
+    toggleSessionLabel(102, "sensitive");
+    toggleSessionLabel(103, "train");
+    toggleSessionLabel(103, "favorite");
+
+    const sessions = listRecentSessions();
+    const trainSession = sessions.find((session) => session.id === 100);
+    const holdoutSession = sessions.find((session) => session.id === 101);
+    const reviewSession = sessions.find((session) => session.id === 102);
+    const favoriteSession = sessions.find((session) => session.id === 103);
+
+    assert.equal(sessions.length, 30);
+    assert.equal(trainSession?.workflowState, "train_ready");
+    assert.equal(holdoutSession?.workflowState, "holdout_ready");
+    assert.equal(reviewSession?.workflowState, "needs_review");
+    assert.deepEqual(reviewSession?.labels, ["sensitive", "train"]);
+    assert.equal(favoriteSession?.workflowState, "train_ready");
+    assert.deepEqual(favoriteSession?.labels, ["favorite", "train"]);
+  });
+});
+
+test("query layer includes workflow state and labels on search results for review sessions", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'codex', 'Codex', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (140, 1, 'session-search-review', 'Searchable review session', '/tmp/demo', '2026-03-25T18:00:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (410, 140, 1, 'user', 'Investigate the review-only analytics session.', 'hash-review', '2026-03-25T18:00:00Z', 'text', '{}')
+    `).run();
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+    toggleSessionLabel(140, "train");
+    toggleSessionLabel(140, "sensitive");
+
+    const results = searchSessions("review-only analytics");
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.workflowState, "needs_review");
+    assert.deepEqual(results[0]?.labels, ["sensitive", "train"]);
   });
 });
 

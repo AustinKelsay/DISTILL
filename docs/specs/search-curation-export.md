@@ -49,6 +49,14 @@ Examples:
 
 The query layer may expose list and detail read models, but those read models must derive from the current projection and manual curation state.
 
+Session list must support:
+
+- title
+- source kind
+- current manual labels
+- derived workflow state for review and export readiness
+- search results intersected with the active session workflow filter when the UI applies one
+
 Session detail must support:
 
 - title
@@ -90,6 +98,9 @@ Current normative behavior:
 - manual, session-level only
 - stronger than tags because labels decide export inclusion and review-routing behavior, while tags remain descriptive only
 - intended to drive export and review flows
+- `train`, `holdout`, and `exclude` are mutually exclusive dataset labels
+- `sensitive` and `favorite` are orthogonal labels that may coexist with at most one dataset label
+- enabling one dataset label must remove any conflicting dataset label in the same transaction
 - labels take precedence over tags in conflict resolution
 - UI surfaces should show labels before tags
 - export metadata should list labels before tags
@@ -104,9 +115,62 @@ Starter label set:
 
 The label catalog may expand, but every label remains explicit and local.
 
+Current canonical workflow interpretation:
+
+- `train`: approved for train export unless blocked by `sensitive`
+- `holdout`: approved for holdout export unless blocked by `sensitive`
+- `exclude`: review-only, never included in standard dataset export
+- `sensitive`: review-only modifier, blocks standard dataset export
+- `favorite`: bookmark-only, never an export target by itself
+
+Current canonical session workflow states are:
+
+- `needs_review`: session has `exclude` or `sensitive`
+- `train_ready`: session has `train` and does not have `exclude` or `sensitive`
+- `holdout_ready`: session has `holdout` and does not have `exclude` or `sensitive`
+- `favorite`: session has `favorite` and is not in another higher-priority workflow state
+- `neutral`: session has no review or export-driving labels
+
+Workflow state priority is:
+
+1. `needs_review`
+2. `train_ready`
+3. `holdout_ready`
+4. `favorite`
+5. `neutral`
+
+Current canonical Sessions filter lanes are:
+
+- `All`
+- `Needs Review`
+- `Train Ready`
+- `Holdout Ready`
+- `Favorites`
+
+Lane semantics:
+
+- `Needs Review` contains sessions with `exclude` or `sensitive`
+- `Train Ready` contains sessions with workflow state `train_ready`
+- `Holdout Ready` contains sessions with workflow state `holdout_ready`
+- `Favorites` contains sessions with label `favorite`
+- unlabeled sessions remain visible in `All` only in the current MVP branch
+
 ## Export Contract
 
-Current canonical export behavior is labeled session export from the current materialized projection.
+Current canonical export behavior is approved dataset export from the current materialized projection.
+
+Current approved dataset targets are:
+
+- `train`
+- `holdout`
+
+Dataset export eligibility rules:
+
+- a session is eligible for `train` export only when it has label `train` and does not have `exclude` or `sensitive`
+- a session is eligible for `holdout` export only when it has label `holdout` and does not have `exclude` or `sensitive`
+- sessions with `exclude` are review-only and must not appear in standard dataset export
+- sessions with `sensitive` are review-only and must not appear in standard dataset export
+- `favorite` never makes a session exportable by itself
 
 Required export content:
 
@@ -131,9 +195,9 @@ Derivation algorithm:
 
 1. iterate projected messages in ordinal order
 2. when a `user` message is encountered, store it as the pending user value
-3. if another `user` message appears before an `assistant`, replace the pending user value with the newer one
-4. when an `assistant` message appears while a pending user value exists, emit one `{ user, assistant }` pair and clear the pending user value
-5. `assistant` messages without a pending user value do not create a pair
+3. if another `user` message appears before a non-meta `assistant`, replace the pending user value with the newer one
+4. when an `assistant` message with `message_kind != "meta"` appears while a pending user value exists, emit one `{ user, assistant }` pair and clear the pending user value
+5. `assistant` messages with `message_kind = "meta"` and `assistant` messages without a pending user value do not create a pair
 6. a trailing `user` message without a following `assistant` does not create a pair
 
 This intentionally mirrors the current implementation rather than a richer future pairing model.

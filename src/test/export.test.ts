@@ -7,7 +7,7 @@ import test from "node:test";
 import { addSessionTag, ensureDefaultLabels, toggleSessionLabel } from "../distill/curation";
 import { openDistillDatabase } from "../distill/db";
 import { ensureDirectory } from "../distill/fs";
-import { exportSessionsByLabel } from "../distill/export";
+import { exportApprovedSessions } from "../distill/export";
 import { runImport } from "../distill/import";
 
 function withTempDistill<T>(fn: (root: string) => T): T {
@@ -104,7 +104,17 @@ function writeFakeOpenCodeExecutable(
     fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
   }
 
+  const safeExecPath = process.execPath
+    .replace(/%/g, "%%")
+    .replace(/\^/g, "^^")
+    .replace(/&/g, "^&")
+    .replace(/\|/g, "^|")
+    .replace(/</g, "^<")
+    .replace(/>/g, "^>")
+    .replace(/"/g, "\"\"");
+
   const scriptPath = path.join(binDir, "opencode");
+  const cmdPath = path.join(binDir, "opencode.cmd");
   fs.writeFileSync(
     scriptPath,
     `#!/usr/bin/env node
@@ -139,6 +149,12 @@ process.stderr.write("unsupported fake opencode command\\n");
 process.exit(1);
 `
   );
+  fs.writeFileSync(
+    cmdPath,
+    `@echo off
+"${safeExecPath}" "%~dp0opencode" %*
+`
+  );
   if (process.platform !== "win32") {
     fs.chmodSync(scriptPath, 0o755);
   }
@@ -150,7 +166,7 @@ process.exit(1);
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
 }
 
-test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
+test("exportApprovedSessions writes approved dataset sessions to JSONL", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -186,7 +202,7 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
     addSessionTag(40, "marketing");
     toggleSessionLabel(40, "train");
 
-    const report = exportSessionsByLabel("train");
+    const report = exportApprovedSessions("train");
     const lines = fs.readFileSync(report.outputPath, "utf8").trim().split("\n");
     const payload = JSON.parse(lines[0] ?? "{}");
     const verifyDb = openDistillDatabase();
@@ -196,6 +212,7 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
     verifyDb.close();
 
     assert.equal(report.recordCount, 1);
+    assert.equal(report.dataset, "train");
     assert.equal(lines.length, 1);
     assert.equal(payload.title, "Export me");
     assert.equal(payload.source_url, "https://example.test/export/40");
@@ -221,7 +238,7 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
   });
 });
 
-test("exportSessionsByLabel preserves imported OpenCode meta messages and projection metadata", () => {
+test("exportApprovedSessions preserves imported OpenCode meta messages and projection metadata", () => {
   withTempImportEnv((root) => {
     writeFakeOpenCodeExecutable(
       root,
@@ -287,7 +304,7 @@ test("exportSessionsByLabel preserves imported OpenCode meta messages and projec
     ensureDefaultLabels();
     toggleSessionLabel(session!.id, "train");
 
-    const report = exportSessionsByLabel("train");
+    const report = exportApprovedSessions("train");
     const payload = JSON.parse(fs.readFileSync(report.outputPath, "utf8").trim() || "{}");
 
     assert.equal(payload.external_session_id, "ses_meta");
@@ -303,13 +320,18 @@ test("exportSessionsByLabel preserves imported OpenCode meta messages and projec
       partType: "reasoning"
     });
     assert.equal(payload.messages[2].message_kind, "text");
+    assert.equal(payload.turn_pairs.length, 1);
+    assert.deepEqual(payload.turn_pairs[0], {
+      user: "Ship the OpenCode connector",
+      assistant: "I will update the connector."
+    });
     assert.deepEqual(payload.metadata.externalSessionIdProvenance, {
       kind: "source"
     });
   });
 });
 
-test("exportSessionsByLabel trims and normalizes the requested label", () => {
+test("exportApprovedSessions trims and normalizes the requested dataset", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -331,14 +353,70 @@ test("exportSessionsByLabel trims and normalizes the requested label", () => {
     ensureDefaultLabels();
     toggleSessionLabel(41, "train");
 
-    const report = exportSessionsByLabel("  TRAIN  ");
-    assert.equal(report.label, "train");
+    const report = exportApprovedSessions("  TRAIN  ");
+    assert.equal(report.dataset, "train");
     assert.equal(report.recordCount, 1);
     assert.match(path.basename(report.outputPath), /^train-sessions-/);
   });
 });
 
-test("exportSessionsByLabel cleans up temp files when the export transaction fails", () => {
+test("exportApprovedSessions excludes review-only sessions and preserves favorite metadata", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'claude_code', 'Claude Code', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES
+      (50, 1, 'session-safe', 'Safe train session', '/tmp/demo', '2026-03-25T18:00:00Z', 1, 1, '{}'),
+      (51, 1, 'session-review', 'Sensitive train session', '/tmp/demo', '2026-03-25T18:01:00Z', 1, 1, '{}'),
+      (52, 1, 'session-favorite', 'Favorite train session', '/tmp/demo', '2026-03-25T18:02:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (50, 1, 'user', 'Safe train payload', 'safe', '2026-03-25T18:00:00Z', 'text', '{}'),
+      (51, 1, 'user', 'Sensitive train payload', 'review', '2026-03-25T18:01:00Z', 'text', '{}'),
+      (52, 1, 'user', 'Favorite train payload', 'favorite', '2026-03-25T18:02:00Z', 'text', '{}')
+    `).run();
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+    toggleSessionLabel(50, "train");
+    toggleSessionLabel(51, "train");
+    toggleSessionLabel(51, "sensitive");
+    toggleSessionLabel(52, "train");
+    toggleSessionLabel(52, "favorite");
+
+    const report = exportApprovedSessions("train");
+    const payloads = fs.readFileSync(report.outputPath, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { external_session_id: string; labels: string[] });
+    const favoritePayload = payloads.find((payload) => payload.external_session_id === "session-favorite");
+
+    assert.equal(report.recordCount, 2);
+    assert.deepEqual(
+      payloads.map((payload) => payload.external_session_id).sort(),
+      ["session-favorite", "session-safe"]
+    );
+    assert.equal(payloads.some((payload) => payload.external_session_id === "session-review"), false);
+    assert.deepEqual(favoritePayload?.labels, ["favorite", "train"]);
+  });
+});
+
+test("exportApprovedSessions cleans up temp files when the export transaction fails", () => {
   withTempDistill((root) => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -373,7 +451,7 @@ test("exportSessionsByLabel cleans up temp files when the export transaction fai
     };
 
     try {
-      assert.throws(() => exportSessionsByLabel("train"), /commit failed/);
+      assert.throws(() => exportApprovedSessions("train"), /commit failed/);
     } finally {
       DatabaseSync.prototype.exec = originalExec;
     }

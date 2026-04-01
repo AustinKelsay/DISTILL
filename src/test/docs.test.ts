@@ -67,8 +67,8 @@ test("root docs point to the canonical docs package and discovery is non-normati
   assert.match(readme, /not the canonical source of truth/i);
   assert.match(readme, /recoverable raw capture storage/i);
   assert.match(readme, /activity auditing/i);
-  assert.doesNotMatch(readme, /^- Distill-owned recoverable raw capture storage$/m);
-  assert.doesNotMatch(readme, /^- canonical activity auditing across projection, curation, and sync lifecycle$/m);
+  assert.doesNotMatch(readme, /^- Distill-owned recoverable raw capture storage(?:\b.*)?$/m);
+  assert.doesNotMatch(readme, /^- canonical activity auditing across projection, curation, and sync lifecycle(?:\b.*)?$/m);
 
   assert.match(plan, /docs\/roadmap\/spec-alignment-plan\.md/);
   assert.match(plan, /roadmap pointer/i);

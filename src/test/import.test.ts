@@ -1547,6 +1547,63 @@ test("openDistillDatabase migrates legacy failed capture statuses to failed_pars
   });
 });
 
+test("openDistillDatabase adds the legacy artifacts.message_id column before artifact writes resume", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const databasePath = path.join(process.env.DISTILL_HOME ?? path.join(root, ".distill"), "distill.db");
+    ensureDirectory(path.dirname(databasePath));
+
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(fs.readFileSync(path.resolve(process.cwd(), "schema.sql"), "utf8"));
+    legacyDb.exec("DROP TABLE artifacts");
+    legacyDb.exec(`
+      CREATE TABLE artifacts (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+        capture_record_id INTEGER REFERENCES capture_records(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        mime_type TEXT,
+        blob_path TEXT,
+        sha256 TEXT,
+        byte_size INTEGER,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    legacyDb.exec(`
+      CREATE INDEX idx_artifacts_session
+        ON artifacts(session_id)
+    `);
+    legacyDb.close();
+
+    const distillDb = openDistillDatabase();
+    try {
+      distillDb.db.prepare(`
+        INSERT INTO artifacts (message_id, kind, metadata_json)
+        VALUES (?, ?, ?)
+      `).run(null, "tool_call", "{}");
+    } finally {
+      distillDb.close();
+    }
+
+    const db = new DatabaseSync(databasePath);
+    const artifactColumns = db
+      .prepare("PRAGMA table_info(artifacts)")
+      .all() as Array<{ name: string; type: string }>;
+    const artifact = db
+      .prepare("SELECT message_id, kind FROM artifacts LIMIT 1")
+      .get() as { message_id: number | null; kind: string };
+
+    assert.equal(artifactColumns.some((column) => column.name === "message_id"), true);
+    assert.equal(artifactColumns.find((column) => column.name === "message_id")?.type, "INTEGER");
+    assert.equal(artifact.message_id, null);
+    assert.equal(artifact.kind, "tool_call");
+
+    db.close();
+  });
+});
+
 test("openDistillDatabase backfills legacy artifact message links from the last projected message for shared provenance", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);

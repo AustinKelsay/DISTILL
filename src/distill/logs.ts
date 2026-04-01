@@ -43,6 +43,7 @@ type SyncPayload = {
 
 type ExportPayload = {
   exportedAt?: string;
+  dataset?: string;
 };
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -145,7 +146,7 @@ function mapSyncJob(row: SyncJobRow): LogEntry {
 
 function mapExport(row: ExportRow): LogEntry {
   const payload = parseJson<ExportPayload>(row.metadata_json, {});
-  const label = row.label_filter ?? "all";
+  const dataset = payload.dataset ?? row.label_filter ?? "all";
   const recordLabel = row.record_count === 1 ? "record" : "records";
 
   return {
@@ -154,21 +155,21 @@ function mapExport(row: ExportRow): LogEntry {
     status: "completed",
     level: "info",
     title: "Export",
-    summary: `Exported ${row.record_count} ${label} ${recordLabel}`,
+    summary: `Exported ${row.record_count} ${dataset} dataset ${recordLabel}`,
     createdAt: payload.exportedAt ?? row.created_at,
     updatedAt: payload.exportedAt ?? row.created_at,
-    sourceLabel: label,
+    sourceLabel: dataset,
     metrics: {
       recordCount: row.record_count
     },
     details: {
-      label,
+      dataset,
       outputPath: row.output_path
     },
     rawJson: stringifyRaw({
       exportId: row.id,
       exportType: row.export_type,
-      label,
+      dataset,
       outputPath: row.output_path,
       recordCount: row.record_count,
       ...payload

@@ -184,6 +184,85 @@ test("toggleSessionLabel audits enable and disable transitions", () => {
   });
 });
 
+test("toggleSessionLabel removes conflicting dataset labels and audits both transitions", () => {
+  withTempDistill(() => {
+    seedSession(15);
+
+    toggleSessionLabel(15, "train");
+    toggleSessionLabel(15, "holdout");
+
+    const distillDb = openDistillDatabase();
+    try {
+      const labels = distillDb.db.prepare(`
+        SELECT l.name
+        FROM label_assignments la
+        JOIN labels l ON l.id = la.label_id
+        WHERE la.object_type = 'session'
+        AND la.object_id = 15
+        ORDER BY l.name ASC
+      `).all() as Array<{ name: string }>;
+      const events = distillDb.db.prepare(`
+        SELECT payload_json
+        FROM activity_events
+        ORDER BY id ASC
+      `).all() as Array<{ payload_json: string }>;
+      const payloads = events.map((event) => JSON.parse(event.payload_json) as Record<string, unknown>);
+
+      assert.deepEqual(labels.map((label) => label.name), ["holdout"]);
+      assert.deepEqual(
+        payloads.map((payload) => ({ labelName: payload.labelName, enabled: payload.enabled })),
+        [
+          { labelName: "train", enabled: true },
+          { labelName: "train", enabled: false },
+          { labelName: "holdout", enabled: true }
+        ]
+      );
+    } finally {
+      distillDb.close();
+    }
+  });
+});
+
+test("toggleSessionLabel keeps orthogonal labels while review labels take priority", () => {
+  withTempDistill(() => {
+    seedSession(16);
+
+    toggleSessionLabel(16, "holdout");
+    toggleSessionLabel(16, "favorite");
+    toggleSessionLabel(16, "sensitive");
+    toggleSessionLabel(16, "exclude");
+
+    const distillDb = openDistillDatabase();
+    try {
+      const labels = distillDb.db.prepare(`
+        SELECT l.name
+        FROM label_assignments la
+        JOIN labels l ON l.id = la.label_id
+        WHERE la.object_type = 'session'
+        AND la.object_id = 16
+        ORDER BY l.name ASC
+      `).all() as Array<{ name: string }>;
+      const events = distillDb.db.prepare(`
+        SELECT payload_json
+        FROM activity_events
+        ORDER BY id ASC
+      `).all() as Array<{ payload_json: string }>;
+      const payloads = events.map((event) => JSON.parse(event.payload_json) as Record<string, unknown>);
+
+      assert.deepEqual(labels.map((label) => label.name), ["exclude", "favorite", "sensitive"]);
+      assert.deepEqual(
+        payloads.slice(-2).map((payload) => ({ labelName: payload.labelName, enabled: payload.enabled })),
+        [
+          { labelName: "holdout", enabled: false },
+          { labelName: "exclude", enabled: true }
+        ]
+      );
+    } finally {
+      distillDb.close();
+    }
+  });
+});
+
 test("toggleSessionLabel ignores derived assignments when no manual label exists", () => {
   withTempDistill(() => {
     seedSession(14);

@@ -77,16 +77,21 @@ function migrateLegacySchema(db: DatabaseSync): void {
     .all() as TableInfoRow[];
   const objectIdColumn = activityEventColumns.find((column) => column.name === "object_id");
   const needsActivityEventMigration = Boolean(objectIdColumn && objectIdColumn.notnull !== 0);
+  const needsArtifactMessageIdMigration = !tableHasColumn(db, "artifacts", "message_id");
   const hasLegacyFailedCaptureStatus = Boolean(
     db.prepare("SELECT 1 FROM captures WHERE status = 'failed' LIMIT 1").get() as { 1: number } | undefined
   );
 
-  if (!needsActivityEventMigration && !hasLegacyFailedCaptureStatus) {
+  if (!needsActivityEventMigration && !needsArtifactMessageIdMigration && !hasLegacyFailedCaptureStatus) {
     return;
   }
 
   db.exec("BEGIN");
   try {
+    if (needsArtifactMessageIdMigration) {
+      db.exec("ALTER TABLE artifacts ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE");
+    }
+
     if (hasLegacyFailedCaptureStatus) {
       db.exec("UPDATE captures SET status = 'failed_parse' WHERE status = 'failed'");
     }

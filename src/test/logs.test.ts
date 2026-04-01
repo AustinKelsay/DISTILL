@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { ensureDefaultLabels, toggleSessionLabel } from "../distill/curation";
 import { openDistillDatabase } from "../distill/db";
-import { exportSessionsByLabel } from "../distill/export";
+import { exportApprovedSessions } from "../distill/export";
 import { getLogsPageData } from "../distill/logs";
 
 function withTempDistill<T>(fn: (root: string) => T): T {
@@ -82,6 +82,8 @@ test("getLogsPageData normalizes mixed sync, warning, and export entries", () =>
     assert.equal(logs.counts.total, 3);
     assert.equal(logs.counts.errors, 1);
     assert.equal(logs.entries[0]?.kind, "export");
+    assert.equal(logs.entries[0]?.summary, "Exported 7 train dataset records");
+    assert.equal(logs.entries[0]?.details?.dataset, "train");
     assert.equal(logs.entries[1]?.kind, "sync");
     assert.equal(logs.entries[1]?.status, "failed");
     assert.equal(logs.entries[1]?.details?.failedEntries?.[0]?.sourcePath, "/tmp/demo.jsonl");
@@ -163,7 +165,7 @@ test("getLogsPageData prefers the persisted warning outcome when failure counts 
   });
 });
 
-test("exportSessionsByLabel entries appear in the logs feed", () => {
+test("exportApprovedSessions entries appear in the logs feed", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -193,12 +195,12 @@ test("exportSessionsByLabel entries appear in the logs feed", () => {
     ensureDefaultLabels();
     toggleSessionLabel(40, "train");
 
-    const report = exportSessionsByLabel("train");
+    const report = exportApprovedSessions("train");
     const logs = getLogsPageData();
     const exportEntry = logs.entries.find((entry) => entry.kind === "export");
 
     assert.ok(exportEntry);
-    assert.equal(exportEntry?.details?.label, "train");
+    assert.equal(exportEntry?.details?.dataset, "train");
     assert.equal(exportEntry?.details?.outputPath, report.outputPath);
     assert.equal(exportEntry?.metrics?.recordCount, 1);
   });

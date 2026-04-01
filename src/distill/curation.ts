@@ -1,7 +1,17 @@
 import { DatabaseSync } from "node:sqlite";
 import { insertActivityEvent, openDistillDatabase } from "./db";
+import { DatasetExportTarget, SessionWorkflowState } from "../shared/types";
 
 const DEFAULT_LABELS = ["train", "holdout", "exclude", "sensitive", "favorite"] as const;
+const DATASET_LABELS = ["train", "holdout", "exclude"] as const;
+const REVIEW_LABELS = ["exclude", "sensitive"] as const;
+const DATASET_EXPORT_TARGETS = ["train", "holdout"] as const;
+
+type ManualLabelAssignmentRow = {
+  id: number;
+  label_id: number;
+  label_name: string;
+};
 
 function withTransaction<T>(db: DatabaseSync, fn: () => T): T {
   let transactionOpen = false;
@@ -57,6 +67,89 @@ export function ensureDefaultLabels(): void {
 
 export function getDefaultLabelNames(): string[] {
   return [...DEFAULT_LABELS];
+}
+
+export function getDatasetExportTargets(): DatasetExportTarget[] {
+  return [...DATASET_EXPORT_TARGETS];
+}
+
+function normalizeLabels(labelNames: Iterable<string>): Set<string> {
+  const labels = new Set<string>();
+
+  for (const label of labelNames) {
+    const normalized = label.trim().toLowerCase();
+    if (normalized) {
+      labels.add(normalized);
+    }
+  }
+
+  return labels;
+}
+
+export function isDatasetLabel(labelName: string): boolean {
+  return DATASET_LABELS.includes(labelName.trim().toLowerCase() as typeof DATASET_LABELS[number]);
+}
+
+function getConflictingDatasetLabels(labelName: string): string[] {
+  const normalized = labelName.trim().toLowerCase();
+  if (!isDatasetLabel(normalized)) {
+    return [];
+  }
+
+  return DATASET_LABELS.filter((label) => label !== normalized);
+}
+
+export function deriveSessionWorkflowState(labelNames: Iterable<string>): SessionWorkflowState {
+  const labels = normalizeLabels(labelNames);
+
+  if (REVIEW_LABELS.some((label) => labels.has(label))) {
+    return "needs_review";
+  }
+
+  if (labels.has("train")) {
+    return "train_ready";
+  }
+
+  if (labels.has("holdout")) {
+    return "holdout_ready";
+  }
+
+  if (labels.has("favorite")) {
+    return "favorite";
+  }
+
+  return "neutral";
+}
+
+export function canExportSessionToDataset(
+  labelNames: Iterable<string>,
+  dataset: DatasetExportTarget
+): boolean {
+  const workflowState = deriveSessionWorkflowState(labelNames);
+
+  return (workflowState === "train_ready" && dataset === "train")
+    || (workflowState === "holdout_ready" && dataset === "holdout");
+}
+
+function insertLabelToggledAudit(
+  db: DatabaseSync,
+  sessionId: number,
+  labelId: number,
+  labelName: string,
+  enabled: boolean
+): void {
+  insertActivityEvent(db, {
+    eventType: "label_toggled",
+    objectType: "session",
+    objectId: sessionId,
+    sessionId,
+    payload: {
+      labelId,
+      labelName,
+      origin: "manual",
+      enabled
+    }
+  });
 }
 
 export function addSessionTag(sessionId: number, tagName: string): void {
@@ -199,21 +292,45 @@ export function toggleSessionLabel(sessionId: number, labelName: string): void {
           return;
         }
 
-        insertActivityEvent(distillDb.db, {
-          eventType: "label_toggled",
-          objectType: "session",
-          objectId: sessionId,
-          sessionId,
-          payload: {
-            labelId: label.id,
-            labelName: label.name,
-            origin: "manual",
-            enabled: false
-          }
-        });
+        insertLabelToggledAudit(distillDb.db, sessionId, label.id, label.name, false);
         return;
       }
 
+      const conflictingLabels = getConflictingDatasetLabels(label.name);
+      if (conflictingLabels.length > 0) {
+        const placeholders = conflictingLabels.map(() => "?").join(", ");
+        const conflictingAssignments = distillDb.db.prepare(`
+          SELECT la.id, l.id AS label_id, l.name AS label_name
+          FROM label_assignments la
+          JOIN labels l ON l.id = la.label_id
+          WHERE la.object_type = 'session'
+          AND la.object_id = ?
+          AND la.origin = 'manual'
+          AND l.name IN (${placeholders})
+          ORDER BY l.name ASC
+        `).all(sessionId, ...conflictingLabels) as ManualLabelAssignmentRow[];
+
+        const deleteAssignment = distillDb.db.prepare("DELETE FROM label_assignments WHERE id = ?");
+
+        for (const assignment of conflictingAssignments) {
+          const deleted = deleteAssignment.run(assignment.id);
+          if (deleted.changes === 0) {
+            continue;
+          }
+
+          insertLabelToggledAudit(
+            distillDb.db,
+            sessionId,
+            assignment.label_id,
+            assignment.label_name,
+            false
+          );
+        }
+      }
+
+      // `inserted` stays undefined when the `label_assignments` INSERT hits `ON CONFLICT`,
+      // which intentionally leaves a derived-only assignment untouched and emits no audit.
+      // See "toggleSessionLabel ignores derived assignments when no manual label exists".
       const inserted = distillDb.db
         .prepare(`
           INSERT INTO label_assignments (object_type, object_id, label_id, origin)
@@ -227,18 +344,7 @@ export function toggleSessionLabel(sessionId: number, labelName: string): void {
         return;
       }
 
-      insertActivityEvent(distillDb.db, {
-        eventType: "label_toggled",
-        objectType: "session",
-        objectId: sessionId,
-        sessionId,
-        payload: {
-          labelId: label.id,
-          labelName: label.name,
-          origin: "manual",
-          enabled: true
-        }
-      });
+      insertLabelToggledAudit(distillDb.db, sessionId, label.id, label.name, true);
     });
   } finally {
     distillDb.close();

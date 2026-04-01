@@ -1,10 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDefaultLabels } from "./curation";
+import { canExportSessionToDataset, ensureDefaultLabels } from "./curation";
 import { openDistillDatabase } from "./db";
 import { ensureDirectory } from "./fs";
 import { getDistillHome } from "./paths";
-import { ExportMessageRecord, ExportReport, ExportSessionRecord } from "../shared/types";
+import {
+  DatasetExportTarget,
+  ExportMessageRecord,
+  ExportReport,
+  ExportSessionRecord
+} from "../shared/types";
 
 type ExportSessionRow = {
   id: number;
@@ -29,6 +34,8 @@ type ExportMessageRow = {
   message_kind: "text" | "meta";
   metadata_json: string | null;
 };
+
+const DATASET_EXPORT_TARGETS = new Set<DatasetExportTarget>(["train", "holdout"]);
 
 function makeSafeStem(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
@@ -56,6 +63,10 @@ function buildTurnPairs(messages: ExportMessageRow[]): Array<{
       continue;
     }
 
+    if (message.role === "assistant" && message.message_kind === "meta") {
+      continue;
+    }
+
     if (message.role === "assistant" && pendingUser) {
       pairs.push({
         user: pendingUser,
@@ -68,11 +79,18 @@ function buildTurnPairs(messages: ExportMessageRow[]): Array<{
   return pairs;
 }
 
-export function exportSessionsByLabel(label: string): ExportReport {
-  const normalizedLabel = label.trim().toLowerCase();
-  if (!normalizedLabel) {
-    throw new Error("Label is required for export");
+function normalizeDatasetTarget(dataset: string): DatasetExportTarget {
+  const normalized = dataset.trim().toLowerCase() as DatasetExportTarget;
+
+  if (!DATASET_EXPORT_TARGETS.has(normalized)) {
+    throw new Error("Dataset must be one of: train, holdout");
   }
+
+  return normalized;
+}
+
+export function exportApprovedSessions(dataset: string): ExportReport {
+  const normalizedDataset = normalizeDatasetTarget(dataset);
 
   ensureDefaultLabels();
 
@@ -82,7 +100,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
   ensureDirectory(exportsDir);
 
   const timestampStem = exportedAt.replace(/[:.]/g, "-");
-  const outputPath = path.join(exportsDir, `${makeSafeStem(normalizedLabel)}-sessions-${timestampStem}.jsonl`);
+  const outputPath = path.join(exportsDir, `${makeSafeStem(normalizedDataset)}-sessions-${timestampStem}.jsonl`);
   const tempOutputPath = `${outputPath}.tmp`;
 
   const distillDb = openDistillDatabase();
@@ -109,11 +127,27 @@ export function exportSessionsByLabel(label: string): ExportReport {
         WHERE l.name = ?
         ORDER BY COALESCE(s.updated_at, s.updated_recorded_at) DESC
       `)
-      .all(normalizedLabel) as ExportSessionRow[];
+      .all(normalizedDataset) as ExportSessionRow[];
 
     const lines: string[] = [];
 
     for (const session of sessionRows) {
+      const labels = distillDb.db
+        .prepare(`
+          SELECT l.name
+          FROM label_assignments la
+          JOIN labels l ON l.id = la.label_id
+          WHERE la.object_type = 'session'
+          AND la.object_id = ?
+          ORDER BY l.name ASC
+        `)
+        .all(session.id) as Array<{ name: string }>;
+      const labelNames = labels.map((entry) => entry.name);
+
+      if (!canExportSessionToDataset(labelNames, normalizedDataset)) {
+        continue;
+      }
+
       const messages = distillDb.db
         .prepare(`
           SELECT ordinal, role, text, created_at, message_kind, metadata_json
@@ -131,17 +165,6 @@ export function exportSessionsByLabel(label: string): ExportReport {
           WHERE ta.object_type = 'session'
           AND ta.object_id = ?
           ORDER BY t.name ASC
-        `)
-        .all(session.id) as Array<{ name: string }>;
-
-      const labels = distillDb.db
-        .prepare(`
-          SELECT l.name
-          FROM label_assignments la
-          JOIN labels l ON l.id = la.label_id
-          WHERE la.object_type = 'session'
-          AND la.object_id = ?
-          ORDER BY l.name ASC
         `)
         .all(session.id) as Array<{ name: string }>;
 
@@ -167,7 +190,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
         git_branch: session.git_branch,
         summary: session.summary,
         metadata: parseJsonObject(session.metadata_json),
-        labels: labels.map((entry) => entry.name),
+        labels: labelNames,
         tags: tags.map((tag) => tag.name),
         messages: messageRecords,
         turn_pairs: buildTurnPairs(messages)
@@ -192,10 +215,13 @@ export function exportSessionsByLabel(label: string): ExportReport {
           VALUES ('jsonl', ?, ?, ?, ?)
         `)
         .run(
-          normalizedLabel,
+          normalizedDataset,
           outputPath,
-          sessionRows.length,
-          JSON.stringify({ exportedAt })
+          lines.length,
+          JSON.stringify({
+            exportedAt,
+            dataset: normalizedDataset
+          })
         );
 
       distillDb.db
@@ -212,9 +238,9 @@ export function exportSessionsByLabel(label: string): ExportReport {
           "export",
           Number(exportInsert.lastInsertRowid),
           JSON.stringify({
-            label: normalizedLabel,
+            dataset: normalizedDataset,
             outputPath,
-            recordCount: sessionRows.length,
+            recordCount: lines.length,
             exportedAt
           })
         );
@@ -242,9 +268,9 @@ export function exportSessionsByLabel(label: string): ExportReport {
 
     return {
       exportedAt,
-      label: normalizedLabel,
+      dataset: normalizedDataset,
       outputPath,
-      recordCount: sessionRows.length
+      recordCount: lines.length
     };
   } finally {
     distillDb.close();

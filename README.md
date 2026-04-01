@@ -7,14 +7,14 @@ Distill is a local-first desktop prototype for collecting, normalizing, inspecti
 - Electron + TypeScript desktop prototype
 - SQLite local database bootstrap from `schema.sql`
 - source detection and capture discovery for Codex CLI, Claude Code, and OpenCode
-- Distill-owned recoverable raw capture storage for file-backed and virtual captures
+- local capture persistence with recoverable raw capture storage for file-backed and virtual captures
 - import pipeline that parses local captures into normalized `sessions`, `messages`, `artifacts`, and `capture_records`
 - explicit replace-on-success session projection writes for `sessions`, `messages`, and `artifacts`
 - basic FTS-backed search over normalized session data
 - session detail, artifact inspection, DB explorer, logs, and settings views
 - manual session tags and labels
 - labeled JSONL export
-- canonical activity auditing across capture, projection, curation, export, and sync lifecycle
+- import and sync activity auditing across capture, projection, curation, export, and sync lifecycle events
 - background sync jobs for local source refresh
 - tests for import, parse, query, export, jobs, logs, preferences, and DB inspection
 
