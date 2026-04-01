@@ -200,6 +200,44 @@ test("parseCodexCapture falls back to the first user message for title and captu
   });
 });
 
+test("parseCodexCapture records synthetic external session id provenance when the source id is missing", () => {
+  withTempHomes((root) => {
+    const codexHome = path.join(root, ".codex");
+    ensureDirectory(path.join(codexHome, "archived_sessions"));
+
+    const capturePath = path.join(codexHome, "archived_sessions", "notes.jsonl");
+    fs.writeFileSync(
+      capturePath,
+      [
+        JSON.stringify({
+          timestamp: "2026-03-25T12:10:00Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Fallback to a synthetic id" }]
+          }
+        })
+      ].join("\n")
+    );
+
+    const capture: DiscoveredCapture = {
+      sourceKind: "codex",
+      captureKind: "archived_session",
+      sourcePath: capturePath,
+      metadata: {}
+    };
+
+    const parsed = parseCodexCapture(capture, snapshotCodexCapture(capture));
+
+    assert.equal(parsed.session.externalSessionId, "notes.jsonl");
+    assert.deepEqual(parsed.session.metadata.externalSessionIdProvenance, {
+      kind: "synthetic",
+      strategy: "capture_path_basename"
+    });
+  });
+});
+
 test("parseClaudeCodeCapture filters command noise and derives a useful title", () => {
   withTempHomes((root) => {
     const claudeHome = path.join(root, ".claude");

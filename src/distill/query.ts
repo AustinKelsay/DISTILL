@@ -372,8 +372,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
           m.role AS message_role
         FROM artifacts a
         LEFT JOIN capture_records cr ON cr.id = a.capture_record_id
-        LEFT JOIN messages m ON m.capture_record_id = a.capture_record_id
-          AND m.session_id = a.session_id
+        LEFT JOIN messages m ON m.id = a.message_id
         WHERE a.session_id = ?
         ORDER BY COALESCE(m.ordinal, 999999), COALESCE(cr.line_no, 999999), a.id
       `)

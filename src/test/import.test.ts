@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { sourceConnectors } from "../connectors";
 import { SourceConnector } from "../connectors/types";
-import { getCaptureContentRef, openDistillDatabase, readCaptureText } from "../distill/db";
+import { getCaptureContentRef, openDistillDatabase, readCaptureText, runInTransaction } from "../distill/db";
 import { ensureDirectory } from "../distill/fs";
 import { getInlineCaptureMaxBytes, readCaptureContentText, resolveCaptureBlobPath } from "../distill/raw_capture";
 import { runImport } from "../distill/import";
@@ -459,6 +459,78 @@ test("runImport imports Codex sessions from the live sessions directory", () => 
     assert.equal(session?.project_path, "/tmp/live-demo");
     assert.equal(session?.updated_at, "2026-03-30T08:10:00.000Z");
     assert.equal(codexSummary?.importedCaptures, 2);
+
+    db.close();
+  });
+});
+
+test("runImport links imported artifacts to projected messages while preserving capture provenance", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const claudePath = path.join(root, ".claude", "projects", "demo-project");
+    fs.writeFileSync(
+      path.join(claudePath, "artifact-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "u1",
+          sessionId: "artifact-session",
+          timestamp: "2026-03-25T11:05:00.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Inspect the file read tool activity" }]
+          }
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "a1",
+          parentUuid: "u1",
+          sessionId: "artifact-session",
+          timestamp: "2026-03-25T11:05:05.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Running tool" },
+              { type: "tool_use", name: "Read", input: { file_path: "/tmp/demo/src/app.ts" } },
+              { type: "tool_result", content: "ok" }
+            ]
+          }
+        })
+      ].join("\n")
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const artifactRows = db
+      .prepare(`
+        SELECT
+          a.kind,
+          a.message_id,
+          a.capture_record_id,
+          m.external_message_id
+        FROM artifacts a
+        LEFT JOIN messages m ON m.id = a.message_id
+        WHERE a.session_id = (
+          SELECT id
+          FROM sessions
+          WHERE external_session_id = 'artifact-session'
+        )
+        ORDER BY a.id ASC
+      `)
+      .all() as Array<{
+      kind: string;
+      message_id: number | null;
+      capture_record_id: number | null;
+      external_message_id: string | null;
+    }>;
+
+    assert.equal(report.sourceSummaries.find((summary) => summary.kind === "claude_code")?.importedCaptures, 2);
+    assert.deepEqual(artifactRows.map((row) => row.kind), ["tool_call", "tool_result"]);
+    assert.equal(artifactRows.every((row) => typeof row.message_id === "number"), true);
+    assert.equal(artifactRows.every((row) => typeof row.capture_record_id === "number"), true);
+    assert.equal(new Set(artifactRows.map((row) => row.message_id)).size, 1);
+    assert.equal(artifactRows[0]?.external_message_id, "a1");
 
     db.close();
   });
@@ -1472,5 +1544,109 @@ test("openDistillDatabase migrates legacy failed capture statuses to failed_pars
     assert.equal(capture.status, "failed_parse");
 
     db.close();
+  });
+});
+
+test("openDistillDatabase backfills legacy artifact message links from capture provenance", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const databasePath = path.join(process.env.DISTILL_HOME ?? path.join(root, ".distill"), "distill.db");
+    ensureDirectory(path.dirname(databasePath));
+
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(fs.readFileSync(path.resolve(process.cwd(), "schema.sql"), "utf8"));
+    legacyDb
+      .prepare(`
+        INSERT INTO sources (id, kind, display_name, install_status, metadata_json)
+        VALUES (1, 'claude_code', 'Claude Code', 'installed', '{}')
+      `)
+      .run();
+    legacyDb
+      .prepare(`
+        INSERT INTO sessions (
+          id, source_id, external_session_id, title, message_count, raw_capture_count, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(40, 1, "legacy-artifact-link", "Legacy artifact link", 1, 1, "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO captures (
+          id, source_id, capture_kind, source_path, raw_sha256, parser_version, status, captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(7, 1, "project_session", "/tmp/demo/session.jsonl", "legacy-sha", "v0", "normalized", "2026-03-25T15:00:00Z");
+    legacyDb
+      .prepare(`
+        INSERT INTO capture_records (
+          id, capture_id, line_no, record_type, provider_message_id, role, is_meta, content_json, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(500, 7, 8, "assistant", "msg-1", "assistant", 0, "{}", "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO messages (
+          id, session_id, capture_record_id, external_message_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(200, 40, 500, "msg-1", 1, "assistant", "Running tool", "hash-1", "2026-03-25T15:00:00Z", "text", "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO artifacts (
+          session_id, message_id, capture_record_id, kind, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(40, null, 500, "tool_call", "{}", "2026-03-25T15:00:01Z");
+    legacyDb.close();
+
+    const distillDb = openDistillDatabase();
+    distillDb.close();
+
+    const db = new DatabaseSync(databasePath);
+    const artifact = db
+      .prepare(`
+        SELECT message_id, capture_record_id
+        FROM artifacts
+        WHERE session_id = 40
+      `)
+      .get() as { message_id: number | null; capture_record_id: number | null };
+
+    assert.equal(artifact.message_id, 200);
+    assert.equal(artifact.capture_record_id, 500);
+
+    db.close();
+  });
+});
+
+test("runInTransaction rejects async callbacks and rolls back their writes", () => {
+  withTempEnv(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.exec(`
+      CREATE TABLE tx_async_guard (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+
+    const asyncCallback = (async () => {
+      db.prepare("INSERT INTO tx_async_guard (value) VALUES (?)").run("leaked");
+      await Promise.resolve();
+      return 1;
+    }) as unknown as () => never;
+
+    assert.throws(
+      () => runInTransaction(db, asyncCallback),
+      /runInTransaction does not support async functions/
+    );
+
+    const rowCount = db
+      .prepare("SELECT COUNT(*) AS count FROM tx_async_guard")
+      .get() as { count: number };
+
+    assert.equal(rowCount.count, 0);
+
+    distillDb.close();
   });
 });

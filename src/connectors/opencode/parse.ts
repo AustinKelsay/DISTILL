@@ -347,10 +347,19 @@ export function parseOpenCodeCapture(capture: DiscoveredCapture, snapshot: Captu
     }
   }
 
+  const externalSessionId = textValue(sessionInfo.id) ?? capture.externalSessionId;
+  const resolvedExternalSessionId = externalSessionId ?? capture.sourcePath;
+  const externalSessionIdProvenance = externalSessionId
+    ? { kind: "source" as const }
+    : {
+        kind: "synthetic" as const,
+        strategy: "capture_source_path"
+      };
+
   return {
     session: {
       sourceKind: "opencode",
-      externalSessionId: textValue(sessionInfo.id) ?? capture.externalSessionId ?? capture.sourcePath,
+      externalSessionId: resolvedExternalSessionId,
       title,
       projectPath: textValue(sessionInfo.directory),
       sourceUrl: textValue(capture.metadata.shareUrl),
@@ -372,7 +381,8 @@ export function parseOpenCodeCapture(capture: DiscoveredCapture, snapshot: Captu
         projectID: textValue(sessionInfo.projectID),
         archiveTimestamp: capture.metadata.timeArchived ?? null,
         exportSource: "opencode export",
-        originalTitle: !title || title === generatedTitle ? undefined : generatedTitle
+        originalTitle: !title || title === generatedTitle ? undefined : generatedTitle,
+        externalSessionIdProvenance
       }
     },
     messages,

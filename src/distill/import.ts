@@ -1,18 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { sourceConnectors } from "../connectors";
 import { CaptureSnapshot, SourceConnector } from "../connectors/types";
-import { getTextSha1 } from "./fs";
 import {
   encodeCapturePayload,
   findCapture,
   insertActivityEvent,
-  insertCaptureRecords,
   openDistillDatabase,
-  replaceSessionArtifacts,
-  replaceSessionMessages,
+  replaceSessionProjection,
   updateCaptureFailure,
-  updateCaptureStatus,
-  upsertSession,
   upsertSource
 } from "./db";
 import { getDistillHome } from "./paths";
@@ -213,56 +208,24 @@ function importSourceCaptures(
 
       failureStage = "parse";
       const parsedCapture = connector.parseCapture(capture, snapshot);
-      let transactionOpen = false;
-
-      try {
-        db.exec("BEGIN");
-        transactionOpen = true;
-
-        const captureRecordIdsByLine = insertCaptureRecords(db, captureId, parsedCapture.rawRecords);
-        const sessionId = upsertSession(db, sourceId, parsedCapture.session, parsedCapture.messages.length);
-
-        replaceSessionMessages(
-          db,
-          sessionId,
-          parsedCapture.messages.map((message) => ({
-            ...message,
-            metadata: {
-              ...message.metadata,
-              textHash: getTextSha1(message.text)
-            }
-          })),
-          captureRecordIdsByLine
-        );
-        replaceSessionArtifacts(db, sessionId, parsedCapture.artifacts, captureRecordIdsByLine);
-        updateCaptureStatus(db, captureId, "normalized");
-        insertActivityEvent(db, {
-          eventType: "projection_replaced",
-          objectType: "session",
-          objectId: sessionId,
-          sessionId,
-          payload: {
-            captureId,
-            sourceKind: source.kind,
-            sourcePath: capture.sourcePath,
-            externalSessionId: capture.externalSessionId ?? null,
-            messageCount: parsedCapture.messages.length,
-            artifactCount: parsedCapture.artifacts.length
-          }
-        });
-        db.exec("COMMIT");
-        transactionOpen = false;
-      } catch (error) {
-        if (transactionOpen) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // Preserve the original normalization error below.
-          }
-        }
-
-        throw error;
+      if (captureId === undefined) {
+        throw new Error("Capture id was not assigned before projection replacement");
       }
+      const finalizedCaptureId = captureId;
+
+      replaceSessionProjection(db, {
+        captureId: finalizedCaptureId,
+        sourceId,
+        session: parsedCapture.session,
+        messages: parsedCapture.messages,
+        artifacts: parsedCapture.artifacts,
+        rawRecords: parsedCapture.rawRecords,
+        projectionAudit: {
+          sourceKind: source.kind,
+          sourcePath: capture.sourcePath,
+          externalSessionId: capture.externalSessionId ?? null
+        }
+      });
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
       if (failureStage === "parse" && captureId !== undefined) {

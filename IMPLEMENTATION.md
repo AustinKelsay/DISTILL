@@ -70,17 +70,16 @@ Current tests primarily validate current implementation behavior. The canonical 
 
 ## Current Behavior Notes
 
-The current code already has a solid connector boundary and a working normalized import spine, but several canonical rules are not yet implemented.
+The current codebase already implements the core local-first MVP loop defined in the canonical specs.
 
-Important current gaps:
+Current implementation highlights:
 
-- raw capture contents are not yet persisted into Distill-owned recoverable storage
-- projection semantics are implemented implicitly rather than as a first-class model
-- `activity_events` coverage is incomplete
-- manual curation is not yet auditable
-- jobs and logs currently carry some behavior that the canonical docs classify as operational rather than authoritative
+- recoverable raw capture storage for file-backed and virtual captures
+- append-only capture history plus replace-on-success session projection writes
+- canonical activity auditing for capture, projection, curation, export, and sync lifecycle
+- direct artifact-to-message linkage alongside capture-record provenance
 
-See [docs/gaps/current-state-gap-register.md](docs/gaps/current-state-gap-register.md) for the tracked divergence list.
+See [docs/gaps/current-state-gap-register.md](docs/gaps/current-state-gap-register.md) for historical resolution notes and any newly tracked drift.
 
 ## How This File Should Be Used
 

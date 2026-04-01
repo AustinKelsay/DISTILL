@@ -184,17 +184,26 @@ export function parseClaudeCodeCapture(capture: DiscoveredCapture, snapshot: Cap
     }
   });
 
+  const resolvedSessionId = sessionId ?? path.basename(capture.sourcePath, ".jsonl");
+  const externalSessionIdProvenance = sessionId
+    ? { kind: "source" as const }
+    : {
+        kind: "synthetic" as const,
+        strategy: "capture_path_basename"
+      };
+
   return {
     session: {
       sourceKind: "claude_code",
-      externalSessionId: sessionId ?? path.basename(capture.sourcePath, ".jsonl"),
+      externalSessionId: resolvedSessionId,
       title: pickClaudeTitle(sessionId, historyIndex, messages),
       projectPath,
       gitBranch,
       startedAt,
       updatedAt,
       metadata: {
-        capturePath: capture.sourcePath
+        capturePath: capture.sourcePath,
+        externalSessionIdProvenance
       }
     },
     messages,

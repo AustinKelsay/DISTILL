@@ -6,6 +6,12 @@ This document is normative for the sequencing of the spec realignment program.
 
 Make Distill’s documentation truthful, tech-agnostic, and hard to drift from, then use that spec package to drive future implementation branches.
 
+## Current Status
+
+As of 2026-03-31, the branch sequence below is implemented in the current tree and should be read as the historical spec-alignment program that produced the current baseline.
+
+Use the gap register for any newly discovered drift. Add new roadmap entries only when future work changes canonical behavior or opens a new staged-alignment branch.
+
 ## Branch Sequence
 
 ### 1. `docs/spec-foundation`

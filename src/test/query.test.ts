@@ -283,6 +283,53 @@ test("query layer returns artifact summaries for session detail", () => {
   });
 });
 
+test("query layer reads artifact/message relationships from direct artifact message links", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (4, 'claude_code', 'Claude Code', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (42, 4, 'session-direct-artifact-link', 'Direct artifact link', '/tmp/demo', '2026-03-25T15:05:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (201, 42, 1, 'assistant', 'Running linked tool', 'hash-2', '2026-03-25T15:05:00Z', 'text', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO artifacts (
+        session_id, message_id, kind, metadata_json, created_at
+      ) VALUES
+      (42, 201, 'tool_call', ?, '2026-03-25T15:05:01Z')
+    `).run(JSON.stringify({
+      type: "tool_use",
+      name: "Read",
+      input: {
+        file_path: "/tmp/demo/src/app.ts"
+      }
+    }));
+
+    const detail = getSessionDetail(42);
+
+    assert.equal(detail?.artifacts.length, 1);
+    assert.equal(detail?.artifacts[0]?.messageOrdinal, 1);
+    assert.equal(detail?.artifacts[0]?.messageRole, "assistant");
+
+    distillDb.close();
+  });
+});
+
 test("query layer prefers tool_result errors over partial output previews", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();

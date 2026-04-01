@@ -2,41 +2,37 @@
 
 This document is normative for acknowledged drift between the canonical specs and the current implementation.
 
+All gaps currently listed here are historical. No open spec-alignment gaps are currently tracked in this register.
+
 ## GAP-001: Raw Capture Recoverability
 
-- Canonical rule: every successfully snapshotted capture must store recoverable raw content owned by Distill.
-- Current behavior: the importer stores checksums and metadata, but does not persist `snapshot.rawText` into Distill-owned storage.
-- Impacted files: `src/distill/import.ts`, `src/distill/db.ts`, `schema.sql`
-- Severity: high
-- Target branch: `impl/raw-capture-persistence`
-- Acceptance criteria:
-- file-backed captures persist recoverable raw content
-- virtual captures such as OpenCode exports persist recoverable raw content
-- replay and re-normalization can operate from Distill-owned data alone
+- Status: resolved in the current implementation.
+- Historical rule: every successfully snapshotted capture must store recoverable raw content owned by Distill.
+- Resolution notes:
+- canonical captures persist a `CaptureContentRef` in Distill-owned storage
+- inline and blob-backed raw payloads are recoverable from Distill without rereading the source
+- file-backed captures and virtual OpenCode exports can be replayed from Distill-owned data alone
+- Implemented in: `src/distill/raw_capture.ts`, `src/distill/db.ts`, `src/distill/import.ts`, `src/test/import.test.ts`
 
 ## GAP-002: Snapshot Failure Modeling
 
-- Canonical rule: snapshot failures are audit and operational events, not canonical captures.
-- Current behavior: failed snapshot attempts are inserted into `captures` with a synthetic hash and failure status.
-- Impacted files: `src/distill/import.ts`, `src/distill/db.ts`, `src/test/import.test.ts`
-- Severity: medium
-- Target branch: `impl/raw-capture-persistence`
-- Acceptance criteria:
-- snapshot failures do not create canonical capture rows
-- snapshot failures still appear in audit and sync summaries
-- projection state remains unchanged
+- Status: resolved in the current implementation.
+- Historical rule: snapshot failures are audit and operational events, not canonical captures.
+- Resolution notes:
+- snapshot failures emit `capture_failed` activity events without inserting canonical capture rows
+- failed snapshot attempts still appear in import reports and sync summaries
+- existing projection state remains unchanged when snapshotting fails
+- Implemented in: `src/distill/import.ts`, `src/test/import.test.ts`
 
 ## GAP-003: Projection Semantics Are Implicit
 
-- Canonical rule: `sessions`, `messages`, and `artifacts` are the latest successful materialized projection and replace atomically on success.
-- Current behavior: the code behaves this way, but the rule is implicit in storage helpers and not represented as a first-class model or contract.
-- Impacted files: `src/distill/import.ts`, `src/distill/db.ts`, `schema.sql`
-- Severity: medium
-- Target branch: `impl/projection-cleanup`
-- Acceptance criteria:
-- projection replacement semantics are explicit in code and tests
-- message and artifact linkage follow canonical projection rules
-- no merge-on-failure behavior is possible
+- Status: resolved in the current implementation.
+- Historical rule: `sessions`, `messages`, and `artifacts` are the latest successful materialized projection and replace atomically on success.
+- Resolution notes:
+- projection replacement is represented as a first-class `replaceSessionProjection` write path
+- normalization commits through an explicit transaction boundary instead of scattered helper sequencing
+- rollback-on-failure and replace-on-success semantics remain enforced by import tests
+- Implemented in: `src/distill/db.ts`, `src/distill/import.ts`, `src/test/import.test.ts`
 
 ## GAP-004: Activity Audit Coverage Is Incomplete
 
@@ -75,24 +71,20 @@ This document is normative for acknowledged drift between the canonical specs an
 
 ## GAP-007: Artifact Linkage Is Partial
 
-- Canonical rule: artifacts should use `message_id` when tied to a user-visible message and `capture_record_id` whenever provenance exists.
-- Current behavior: artifacts are linked by `capture_record_id`; `message_id` is present in schema but not populated.
-- Impacted files: `src/distill/db.ts`, `src/distill/query.ts`, `schema.sql`
-- Severity: medium
-- Target branch: `impl/projection-cleanup`
-- Acceptance criteria:
-- materialized artifacts link to projected messages where appropriate
-- provenance remains available through capture records
-- query surfaces expose consistent artifact/message relationships
+- Status: resolved in the current implementation.
+- Historical rule: artifacts should use `message_id` when tied to a user-visible message and `capture_record_id` whenever provenance exists.
+- Resolution notes:
+- imported artifacts now populate `message_id` when a projected message association exists
+- `capture_record_id` remains populated for provenance when capture records exist
+- session detail queries use direct message linkage, and legacy rows are backfilled on database open
+- Implemented in: `src/distill/db.ts`, `src/distill/query.ts`, `src/test/import.test.ts`, `src/test/query.test.ts`
 
 ## GAP-008: Root Docs Still Drifted From The Intended Spec Shape
 
-- Canonical rule: root docs are concise summaries and entrypoints; authoritative architecture lives under `docs/`.
-- Current behavior: root docs historically mixed roadmap, research, current behavior, and aspirational architecture in the same files.
-- Impacted files: `README.md`, `PLAN.md`, `IMPLEMENTATION.md`, `DISCOVERY.md`
-- Severity: medium
-- Target branch: `docs/spec-foundation`
-- Acceptance criteria:
-- root docs stop acting as the canonical source of truth
-- root docs point to `docs/`
-- discovery is explicitly non-normative
+- Status: resolved in the current implementation.
+- Historical rule: root docs are concise summaries and entrypoints; authoritative architecture lives under `docs/`.
+- Resolution notes:
+- root docs now point readers to the canonical docs package under `docs/`
+- informative files stop claiming stale implementation gaps that have already been closed
+- discovery remains explicitly non-normative and machine-specific
+- Implemented in: `README.md`, `PLAN.md`, `IMPLEMENTATION.md`, `DISCOVERY.md`, `src/test/docs.test.ts`

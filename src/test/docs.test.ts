@@ -65,6 +65,10 @@ test("root docs point to the canonical docs package and discovery is non-normati
   assert.match(readme, /Not Implemented Now/);
   assert.match(readme, /docs\/README\.md/);
   assert.match(readme, /not the canonical source of truth/i);
+  assert.match(readme, /recoverable raw capture storage/i);
+  assert.match(readme, /activity auditing/i);
+  assert.doesNotMatch(readme, /^- Distill-owned recoverable raw capture storage$/m);
+  assert.doesNotMatch(readme, /^- canonical activity auditing across projection, curation, and sync lifecycle$/m);
 
   assert.match(plan, /docs\/roadmap\/spec-alignment-plan\.md/);
   assert.match(plan, /roadmap pointer/i);
@@ -72,6 +76,9 @@ test("root docs point to the canonical docs package and discovery is non-normati
   assert.match(implementation, /docs\/specs\/architecture\.md/);
   assert.match(implementation, /docs\/gaps\/current-state-gap-register\.md/);
   assert.match(implementation, /informative/i);
+  assert.doesNotMatch(implementation, /raw capture contents are not yet persisted/i);
+  assert.doesNotMatch(implementation, /projection semantics are implemented implicitly/i);
+  assert.doesNotMatch(implementation, /activity_events coverage is incomplete/i);
 
   assert.match(discovery, /non-normative discovery evidence/i);
   assert.match(discovery, /docs\/specs\/architecture\.md/);
@@ -81,6 +88,9 @@ test("gap register and contract test matrix track the required drift-guard surfa
   const gapRegister = readRepoFile("docs/gaps/current-state-gap-register.md");
   const testMatrix = readRepoFile("docs/testing/contract-test-matrix.md");
   const governance = readRepoFile("docs/governance/spec-governance.md");
+
+  assert.match(gapRegister, /historical/i);
+  assert.match(gapRegister, /No open spec-alignment gaps are currently tracked/i);
 
   for (const gapId of [
     "GAP-001",

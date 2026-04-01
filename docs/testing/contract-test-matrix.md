@@ -2,6 +2,8 @@
 
 This document is normative for planned and required contract tests.
 
+Where a `Primary Branch` or `Target Branch` is listed below, it records the first branch that claimed the contract, even when the scenario is now implemented and passing in the current tree.
+
 ## Suite Index
 
 | Suite | Purpose | Primary Branch |
@@ -49,6 +51,8 @@ Every fixture must document:
 | `PR-001` | `projection_replacement` | Exact duplicate re-import is skipped. | No new capture row, or new row is explicitly not inserted per dedupe policy; projection rows unchanged. | Session list/detail/search remain unchanged. | Test fails if duplicate import mutates projection rows. | `test/raw-capture-contracts` |
 | `PR-002` | `projection_replacement` | Changed capture appends history and replaces projection. | New capture row exists; session capture count increments; messages/artifacts reflect only newest successful projection. | Search and session detail show only current projection data. | Test fails if stale message rows remain visible. | `test/raw-capture-contracts` |
 | `PR-003` | `projection_replacement` | Parse failure after snapshot preserves prior projection. | Capture exists with failure status; new capture records or projection rows are rolled back as required. | Existing session detail remains unchanged. | Test fails if partial rows remain. | `test/raw-capture-contracts` |
+| `PR-004` | `projection_replacement` | Imported artifacts link directly to projected messages while retaining capture provenance. | `artifacts.message_id` and `artifacts.capture_record_id` are both populated when a projected message association and capture provenance exist. | Session detail can show artifact/message relationships without indirect reconstruction. | Test fails if artifact/message relationships depend on capture-record joins alone or provenance is dropped. | `impl/projection-cleanup` |
+| `PR-005` | `projection_replacement` | Sources without stable external ids synthesize deterministic ids and record synthetic provenance. | Session row exists with a deterministic external session id and session metadata records synthetic provenance. | Session detail and re-import remain stable for captures without a source-provided id. | Test fails if projection materializes without a stable fallback id or provenance marker. | `impl/projection-cleanup` |
 | `AA-001` | `activity_audit` | Successful capture and projection emit audit events. | `activity_events` includes `capture_recorded` and `projection_replaced`. | Audit views can attribute session updates to the import run. | Test fails if successful import lacks canonical audit rows. | `impl/activity-and-curation-audit` |
 | `AA-002` | `activity_audit` | Snapshot, raw-persistence, or parse failure emits canonical failure audit. | `activity_events` includes `capture_failed`. | Sync detail can show failure without mutating projection. | Test fails if failures only appear in jobs/logs or abort later healthy captures. | `impl/activity-and-curation-audit` |
 | `AA-003` | `activity_audit` | Manual tag and label changes emit audit rows. | `activity_events` includes `tag_added`, `tag_removed`, and `label_toggled`. | Curation history is auditable. | Test fails if curation changes are silent. | `impl/activity-and-curation-audit` |
