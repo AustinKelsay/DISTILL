@@ -203,27 +203,29 @@ function renderSyncStatus(status: BackgroundSyncStatus): void {
 function syncStatusText(status: BackgroundSyncStatus | undefined): string {
   if (!status) return "idle";
 
-  const hasWarnings = (status.failedCaptures ?? 0) > 0 || (status.failedEntries?.length ?? 0) > 0;
-
-  return status.state === "running" ? "syncing..."
+  return status.state === "queued" ? "sync queued"
+    : status.state === "running" ? "syncing..."
+    : status.state === "warning" ? (status.finishedAt ? `sync warnings ${timeAgo(status.finishedAt)}` : "sync warnings")
     : status.state === "failed" ? "sync failed"
-    : hasWarnings ? (status.finishedAt ? `sync warnings ${timeAgo(status.finishedAt)}` : "sync warnings")
-    : status.finishedAt ? `synced ${timeAgo(status.finishedAt)}`
+    : status.state === "completed" ? (status.finishedAt ? `synced ${timeAgo(status.finishedAt)}` : "synced")
     : "idle";
 }
 
-function syncStatusTone(status: BackgroundSyncStatus | undefined): "idle" | "running" | "completed" | "warning" | "failed" {
+function syncStatusTone(status: BackgroundSyncStatus | undefined): "idle" | "queued" | "running" | "completed" | "warning" | "failed" {
   if (!status) {
     return "idle";
   }
 
-  if (status.state === "running" || status.state === "failed") {
+  if (
+    status.state === "queued"
+    || status.state === "running"
+    || status.state === "warning"
+    || status.state === "failed"
+  ) {
     return status.state;
   }
 
-  return (status.failedCaptures ?? 0) > 0 || (status.failedEntries?.length ?? 0) > 0
-    ? "warning"
-    : "completed";
+  return "completed";
 }
 
 function formatDateTime(dateStr: string | undefined): string {
@@ -240,6 +242,7 @@ function logStatusBadgeClass(entry: LogEntry): string {
   if (entry.status === "failed") return "badge-status-failed";
   if (entry.status === "running") return "badge-status-running";
   if (entry.status === "queued") return "badge-status-queued";
+  if (entry.status === "warning") return "badge-status-warning";
   if (entry.level === "error") return "badge-status-failed";
   return "badge-status-completed";
 }
@@ -317,7 +320,7 @@ function renderLogEntry(entry: LogEntry): string {
   ].filter(Boolean).join("");
 
   return `
-    <details class="log-card ${entry.level === "error" ? "is-error" : ""}">
+    <details class="log-card ${entry.level === "error" ? "is-error" : entry.status === "warning" ? "is-warning" : ""}">
       <summary>
         <div class="log-card-topline">
           <span class="log-timestamp">${escapeHtml(formatDateTime(entry.updatedAt ?? entry.createdAt))}</span>
@@ -2138,14 +2141,14 @@ function bindBackgroundSync(): void {
     renderSyncStatus(status);
     refreshLogsData(false);
 
-    if (status.state === "completed") {
+    if (status.state === "completed" || status.state === "warning") {
       dashboardData = window.distillApi.getDashboardData();
       if (activeView === "db") {
         refreshDbAfterSync();
       }
     }
 
-    if (activeView === "logs" || status.state === "completed") {
+    if (activeView === "logs" || status.state === "completed" || status.state === "warning") {
       renderCurrentView();
     }
   });

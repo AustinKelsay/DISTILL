@@ -53,13 +53,21 @@ function parseJson<T>(value: string, fallback: T): T {
   }
 }
 
-function normalizeSyncStatus(status: string): LogEntryStatus {
+function hasSyncWarnings(payload: Pick<SyncPayload, "failedCaptures" | "failedEntries">): boolean {
+  return (payload.failedCaptures ?? 0) > 0 || (payload.failedEntries?.length ?? 0) > 0;
+}
+
+function normalizeSyncStatus(status: string, payload: SyncPayload): LogEntryStatus {
   if (status === "pending") {
     return "queued";
   }
 
-  if (status === "running" || status === "completed" || status === "failed") {
+  if (status === "running" || status === "warning" || status === "failed") {
     return status;
+  }
+
+  if (status === "completed") {
+    return hasSyncWarnings(payload) ? "warning" : "completed";
   }
 
   return "queued";
@@ -78,6 +86,10 @@ function summarizeSync(status: LogEntryStatus, payload: SyncPayload): string {
     return `Sync running${payload.reason ? `: ${payload.reason}` : ""}`;
   }
 
+  if (status === "warning") {
+    return "Sync warnings";
+  }
+
   if (status === "failed") {
     return "Sync failed";
   }
@@ -91,10 +103,10 @@ function stringifyRaw(value: Record<string, unknown>): string {
 
 function mapSyncJob(row: SyncJobRow): LogEntry {
   const payload = parseJson<SyncPayload>(row.payload_json, {});
-  const status = normalizeSyncStatus(row.status);
+  const status = normalizeSyncStatus(row.status, payload);
   const failedEntries = payload.failedEntries ?? [];
   const failedCaptures = payload.failedCaptures ?? 0;
-  const level = status === "failed" || failedCaptures > 0 || failedEntries.length > 0 ? "error" : "info";
+  const level = status === "failed" ? "error" : "info";
 
   return {
     id: `sync-${row.id}`,

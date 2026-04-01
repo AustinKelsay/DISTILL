@@ -21,7 +21,7 @@ function withTempDistill<T>(fn: (root: string) => T): T {
   }
 }
 
-test("getLogsPageData normalizes mixed sync and export entries", () => {
+test("getLogsPageData normalizes mixed sync, warning, and export entries", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -30,9 +30,26 @@ test("getLogsPageData normalizes mixed sync and export entries", () => {
       INSERT INTO jobs (
         id, job_type, object_type, object_id, status, attempts, run_after, last_error, payload_json, created_at, updated_at
       ) VALUES
-      (1, 'sync_sources', 'system', 1, 'completed', 1, CURRENT_TIMESTAMP, NULL, '{}', '2026-03-25T10:00:00Z', '2026-03-25T10:05:00Z'),
+      (1, 'sync_sources', 'system', 1, 'completed', 1, CURRENT_TIMESTAMP, NULL, ?, '2026-03-25T10:00:00Z', '2026-03-25T10:05:00Z'),
       (2, 'sync_sources', 'system', 1, 'failed', 1, CURRENT_TIMESTAMP, 'connector exploded', ?, '2026-03-26T09:00:00Z', '2026-03-26T09:02:00Z')
     `).run(
+      JSON.stringify({
+        reason: "startup",
+        startedAt: "2026-03-25T10:00:00Z",
+        finishedAt: "2026-03-25T10:05:00Z",
+        discoveredCaptures: 2,
+        importedCaptures: 1,
+        skippedCaptures: 0,
+        failedCaptures: 1,
+        summary: "Sync complete: 1 imported, 0 skipped, 1 failed across 2 captures",
+        failedEntries: [
+          {
+            sourceKind: "opencode",
+            sourcePath: "/tmp/legacy-warning.json",
+            errorText: "partial failure"
+          }
+        ]
+      }),
       JSON.stringify({
         reason: "manual",
         startedAt: "2026-03-26T09:00:00Z",
@@ -68,7 +85,48 @@ test("getLogsPageData normalizes mixed sync and export entries", () => {
     assert.equal(logs.entries[1]?.kind, "sync");
     assert.equal(logs.entries[1]?.status, "failed");
     assert.equal(logs.entries[1]?.details?.failedEntries?.[0]?.sourcePath, "/tmp/demo.jsonl");
-    assert.equal(logs.entries[2]?.summary, "Sync completed");
+    assert.equal(logs.entries[2]?.status, "warning");
+    assert.equal(logs.entries[2]?.level, "info");
+    assert.equal(logs.entries[2]?.details?.failedEntries?.[0]?.sourcePath, "/tmp/legacy-warning.json");
+  });
+});
+
+test("getLogsPageData surfaces legacy completed rows with failures as warning status", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO jobs (
+        id, job_type, object_type, object_id, status, attempts, run_after, last_error, payload_json, created_at, updated_at
+      ) VALUES (
+        1, 'sync_sources', 'system', 1, 'completed', 1, CURRENT_TIMESTAMP, NULL, ?, '2026-03-26T09:00:00Z', '2026-03-26T09:02:00Z'
+      )
+    `).run(JSON.stringify({
+      reason: "manual",
+      startedAt: "2026-03-26T09:00:00Z",
+      finishedAt: "2026-03-26T09:02:00Z",
+      discoveredCaptures: 4,
+      importedCaptures: 3,
+      skippedCaptures: 0,
+      failedCaptures: 1,
+      summary: "Sync complete: 3 imported, 0 skipped, 1 failed across 4 captures",
+      failedEntries: [
+        {
+          sourceKind: "codex",
+          sourcePath: "/tmp/demo.jsonl",
+          errorText: "connector exploded"
+        }
+      ]
+    }));
+
+    distillDb.close();
+
+    const logs = getLogsPageData();
+
+    assert.equal(logs.entries[0]?.status, "warning");
+    assert.equal(logs.entries[0]?.level, "info");
+    assert.equal(logs.lastSyncStatus?.state, "warning");
   });
 });
 

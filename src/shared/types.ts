@@ -165,7 +165,7 @@ export type ExportReport = {
 };
 
 export type BackgroundSyncStatus = {
-  state: "idle" | "running" | "completed" | "failed";
+  state: "idle" | "queued" | "running" | "warning" | "completed" | "failed";
   jobId?: number;
   reason?: string;
   startedAt?: string;
@@ -184,7 +184,7 @@ export type AppView = "sessions" | "db" | "logs";
 
 export type LogEntryKind = "sync" | "export";
 
-export type LogEntryStatus = "queued" | "running" | "completed" | "failed";
+export type LogEntryStatus = "queued" | "running" | "warning" | "completed" | "failed";
 
 export type LogEntryLevel = "info" | "error";
 

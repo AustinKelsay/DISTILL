@@ -69,7 +69,11 @@ test("exportSessionsByLabel writes labeled sessions to JSONL", () => {
     assert.equal(payload.messages.length, 2);
     assert.equal(payload.turn_pairs.length, 1);
     assert.equal(payload.turn_pairs[0].assistant, "Here is a tighter launch draft.");
-    assert.deepEqual(activityEvents.map((row) => row.event_type), ["export_written"]);
+    assert.deepEqual(activityEvents.map((row) => row.event_type), [
+      "tag_added",
+      "label_toggled",
+      "export_written"
+    ]);
   });
 });
 

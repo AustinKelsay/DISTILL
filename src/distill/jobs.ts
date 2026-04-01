@@ -1,4 +1,5 @@
-import { openDistillDatabase } from "./db";
+import { DatabaseSync } from "node:sqlite";
+import { insertActivityEvent, openDistillDatabase } from "./db";
 import { runImport } from "./import";
 import { BackgroundSyncStatus, ImportFailureEntry, ImportReport, ImportSourceSummary } from "../shared/types";
 
@@ -20,6 +21,7 @@ type SyncPayload = {
   summary?: string;
   sourceSummaries?: ImportSourceSummary[];
   failedEntries?: ImportFailureEntry[];
+  outcome?: "completed" | "warning" | "failed";
 };
 
 function parsePayload(payloadJson: string): SyncPayload {
@@ -29,6 +31,89 @@ function parsePayload(payloadJson: string): SyncPayload {
   } catch {
     return {};
   }
+}
+
+function hasSyncWarnings(payload: Pick<SyncPayload, "failedCaptures" | "failedEntries">): boolean {
+  return (payload.failedCaptures ?? 0) > 0 || (payload.failedEntries?.length ?? 0) > 0;
+}
+
+function deriveSyncState(status: string, payload: SyncPayload): BackgroundSyncStatus["state"] {
+  if (status === "pending") {
+    return "queued";
+  }
+
+  if (status === "running" || status === "warning" || status === "failed") {
+    return status;
+  }
+
+  if (status === "completed") {
+    return hasSyncWarnings(payload) ? "warning" : "completed";
+  }
+
+  return "idle";
+}
+
+function defaultSummary(state: BackgroundSyncStatus["state"], payload: SyncPayload): string {
+  if (state === "queued") {
+    return `Queued sync${payload.reason ? `: ${payload.reason}` : ""}`;
+  }
+
+  if (state === "running") {
+    return `Sync running${payload.reason ? `: ${payload.reason}` : ""}`;
+  }
+
+  if (state === "warning") {
+    return "Sync warnings";
+  }
+
+  if (state === "failed") {
+    return "Sync failed";
+  }
+
+  if (state === "completed") {
+    return "Sync completed";
+  }
+
+  return "Idle";
+}
+
+function withTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  let transactionOpen = false;
+
+  try {
+    db.exec("BEGIN");
+    transactionOpen = true;
+    const result = fn();
+    db.exec("COMMIT");
+    transactionOpen = false;
+    return result;
+  } catch (error) {
+    if (transactionOpen) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original transaction error below.
+      }
+    }
+
+    throw error;
+  }
+}
+
+function insertSyncJobAuditEvent(
+  db: DatabaseSync,
+  input: {
+    eventType: "sync_queued" | "sync_started" | "sync_completed" | "sync_failed";
+    jobId: number;
+    payload: Record<string, unknown>;
+  }
+): void {
+  insertActivityEvent(db, {
+    eventType: input.eventType,
+    objectType: "sync_job",
+    objectId: input.jobId,
+    payload: input.payload
+  });
 }
 
 function toStatus(row: JobRow | undefined): BackgroundSyncStatus {
@@ -44,9 +129,7 @@ function toStatus(row: JobRow | undefined): BackgroundSyncStatus {
   }
 
   const payload = parsePayload(row.payload_json);
-  const state = row.status === "running" || row.status === "completed" || row.status === "failed"
-    ? row.status
-    : "idle";
+  const state = deriveSyncState(row.status, payload);
 
   return {
     state,
@@ -58,7 +141,7 @@ function toStatus(row: JobRow | undefined): BackgroundSyncStatus {
     importedCaptures: payload.importedCaptures ?? 0,
     skippedCaptures: payload.skippedCaptures ?? 0,
     failedCaptures: payload.failedCaptures ?? 0,
-    summary: payload.summary ?? (state === "running" ? "Sync running" : "Idle"),
+    summary: payload.summary ?? defaultSummary(state, payload),
     errorText: row.last_error ?? undefined,
     sourceSummaries: payload.sourceSummaries,
     failedEntries: payload.failedEntries
@@ -70,32 +153,80 @@ function summarizeImport(report: ImportReport): BackgroundSyncStatus {
   const importedCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.importedCaptures, 0);
   const skippedCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.skippedCaptures, 0);
   const failedCaptures = report.sourceSummaries.reduce((sum, source) => sum + source.failedCaptures, 0);
+  const failedEntries = report.failedEntries;
+  const state = failedCaptures > 0 || failedEntries.length > 0 ? "warning" : "completed";
+  const summary =
+    state === "warning" ?
+      `Sync warnings: ${importedCaptures} imported, ${skippedCaptures} skipped, ${failedCaptures} failed across ${discoveredCaptures} captures`
+    : `Sync complete: ${importedCaptures} imported, ${skippedCaptures} skipped, ${failedCaptures} failed across ${discoveredCaptures} captures`;
 
   return {
-    state: "completed",
+    state,
     startedAt: report.importedAt,
     finishedAt: report.importedAt,
     discoveredCaptures,
     importedCaptures,
     skippedCaptures,
     failedCaptures,
-    summary: `Sync complete: ${importedCaptures} imported, ${skippedCaptures} skipped, ${failedCaptures} failed across ${discoveredCaptures} captures`,
+    summary,
     sourceSummaries: report.sourceSummaries,
-    failedEntries: report.failedEntries
+    failedEntries
   };
 }
 
 export function markStaleRunningSyncJobsFailed(): void {
   const distillDb = openDistillDatabase();
   try {
-    distillDb.db.prepare(`
-      UPDATE jobs
-      SET status = 'failed',
-          last_error = 'Interrupted before completion',
-          updated_at = CURRENT_TIMESTAMP
-      WHERE job_type = 'sync_sources'
-      AND status = 'running'
-    `).run();
+    const runningJobs = distillDb.db
+      .prepare(`
+        SELECT id, payload_json
+        FROM jobs
+        WHERE job_type = 'sync_sources'
+        AND status = 'running'
+      `)
+      .all() as Array<{ id: number; payload_json: string }>;
+
+    if (runningJobs.length === 0) {
+      return;
+    }
+
+    withTransaction(distillDb.db, () => {
+      const update = distillDb.db.prepare(`
+        UPDATE jobs
+        SET status = 'failed',
+            last_error = ?,
+            payload_json = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `);
+
+      for (const row of runningJobs) {
+        const payload = parsePayload(row.payload_json);
+        const finishedAt = new Date().toISOString();
+        const errorText = "Interrupted before completion";
+
+        update.run(
+          errorText,
+          JSON.stringify({
+            ...payload,
+            finishedAt,
+            summary: "Sync failed",
+            outcome: "failed"
+          }),
+          row.id
+        );
+        insertSyncJobAuditEvent(distillDb.db, {
+          eventType: "sync_failed",
+          jobId: row.id,
+          payload: {
+            reason: payload.reason,
+            errorText,
+            scope: "job",
+            fatal: true
+          }
+        });
+      }
+    });
   } finally {
     distillDb.close();
   }
@@ -104,18 +235,31 @@ export function markStaleRunningSyncJobsFailed(): void {
 export function enqueueSourceSyncJob(reason: string): number {
   const distillDb = openDistillDatabase();
   try {
-    const row = distillDb.db.prepare(`
-      INSERT INTO jobs (
-        job_type,
-        object_type,
-        object_id,
-        status,
-        run_after,
-        payload_json,
-        updated_at
-      ) VALUES ('sync_sources', 'system', 1, 'pending', CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
-      RETURNING id
-    `).get(JSON.stringify({ reason, summary: `Queued sync: ${reason}` })) as { id: number };
+    const row = withTransaction(distillDb.db, () => {
+      const inserted = distillDb.db.prepare(`
+        INSERT INTO jobs (
+          job_type,
+          object_type,
+          object_id,
+          status,
+          run_after,
+          payload_json,
+          updated_at
+        ) VALUES ('sync_sources', 'system', 1, 'pending', CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
+        RETURNING id
+      `).get(JSON.stringify({ reason, summary: `Queued sync: ${reason}` })) as { id: number };
+
+      insertSyncJobAuditEvent(distillDb.db, {
+        eventType: "sync_queued",
+        jobId: inserted.id,
+        payload: {
+          reason,
+          jobType: "sync_sources"
+        }
+      });
+
+      return inserted;
+    });
 
     return row.id;
   } finally {
@@ -166,53 +310,83 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
     reason = payload.reason;
     startedAt = new Date().toISOString();
 
-    distillDb.db.prepare(`
-      UPDATE jobs
-      SET status = 'running',
-          attempts = attempts + 1,
-          payload_json = ?,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
-      JSON.stringify({
-        ...payload,
-        startedAt,
-        summary: `Sync running: ${payload.reason ?? "scheduled"}`
-      }),
-      row.id
-    );
-  } finally {
-    distillDb.close();
-  }
-
-  try {
-    const report = runImport();
-    const status = summarizeImport(report);
-
-    const completeDb = openDistillDatabase();
-    try {
-      completeDb.db.prepare(`
+    withTransaction(distillDb.db, () => {
+      distillDb.db.prepare(`
         UPDATE jobs
-        SET status = 'completed',
-            last_error = NULL,
+        SET status = 'running',
+            attempts = attempts + 1,
             payload_json = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(
         JSON.stringify({
+          ...payload,
           startedAt,
-          finishedAt: status.finishedAt,
-          reason,
-          discoveredCaptures: status.discoveredCaptures,
-          importedCaptures: status.importedCaptures,
-          skippedCaptures: status.skippedCaptures,
-          failedCaptures: status.failedCaptures,
-          summary: status.summary,
-          sourceSummaries: status.sourceSummaries,
-          failedEntries: status.failedEntries
+          summary: `Sync running: ${payload.reason ?? "scheduled"}`
         }),
-        jobId
+        row.id
       );
+      insertSyncJobAuditEvent(distillDb.db, {
+        eventType: "sync_started",
+        jobId: row.id,
+        payload: {
+          reason,
+          jobType: "sync_sources"
+        }
+      });
+    });
+  } finally {
+    distillDb.close();
+  }
+
+  try {
+    const report = runImport({
+      syncJobId: jobId,
+      syncReason: reason
+    });
+    const status = summarizeImport(report);
+
+    const completeDb = openDistillDatabase();
+    try {
+      withTransaction(completeDb.db, () => {
+        completeDb.db.prepare(`
+          UPDATE jobs
+          SET status = ?,
+              last_error = NULL,
+              payload_json = ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(
+          status.state === "warning" ? "warning" : "completed",
+          JSON.stringify({
+            startedAt,
+            finishedAt: status.finishedAt,
+            reason,
+            discoveredCaptures: status.discoveredCaptures,
+            importedCaptures: status.importedCaptures,
+            skippedCaptures: status.skippedCaptures,
+            failedCaptures: status.failedCaptures,
+            summary: status.summary,
+            sourceSummaries: status.sourceSummaries,
+            failedEntries: status.failedEntries,
+            outcome: status.state === "warning" ? "warning" : "completed"
+          }),
+          jobId
+        );
+        insertSyncJobAuditEvent(completeDb.db, {
+          eventType: "sync_completed",
+          jobId: jobId ?? 0,
+          payload: {
+            reason,
+            discoveredCaptures: status.discoveredCaptures,
+            importedCaptures: status.importedCaptures,
+            skippedCaptures: status.skippedCaptures,
+            failedCaptures: status.failedCaptures,
+            failedEntryCount: status.failedEntries?.length ?? 0,
+            outcome: status.state === "warning" ? "warning" : "completed"
+          }
+        });
+      });
     } finally {
       completeDb.close();
     }
@@ -227,24 +401,37 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
     const failedDb = openDistillDatabase();
 
     try {
-      failedDb.db.prepare(`
-        UPDATE jobs
-        SET status = 'failed',
-            last_error = ?,
-            payload_json = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        errorText,
-        JSON.stringify({
-          startedAt,
-          finishedAt: failedAt,
-          reason,
-          summary: "Sync failed",
-          failedEntries: []
-        }),
-        jobId
-      );
+      withTransaction(failedDb.db, () => {
+        failedDb.db.prepare(`
+          UPDATE jobs
+          SET status = 'failed',
+              last_error = ?,
+              payload_json = ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(
+          errorText,
+          JSON.stringify({
+            startedAt,
+            finishedAt: failedAt,
+            reason,
+            summary: "Sync failed",
+            failedEntries: [],
+            outcome: "failed"
+          }),
+          jobId
+        );
+        insertSyncJobAuditEvent(failedDb.db, {
+          eventType: "sync_failed",
+          jobId: jobId ?? 0,
+          payload: {
+            reason,
+            errorText,
+            scope: "job",
+            fatal: true
+          }
+        });
+      });
     } finally {
       failedDb.close();
     }

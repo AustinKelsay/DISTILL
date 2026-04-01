@@ -40,42 +40,38 @@ This document is normative for acknowledged drift between the canonical specs an
 
 ## GAP-004: Activity Audit Coverage Is Incomplete
 
-- Canonical rule: `activity_events` must cover capture, failure, projection, manual curation, export, and sync lifecycle.
-- Current behavior: capture insertion, capture failure, projection replacement, export, and source-scoped detect/discover failure rows are audited, but manual curation and top-level sync lifecycle audit coverage remain incomplete.
-- Impacted files: `src/distill/import.ts`, `src/distill/export.ts`, `src/distill/curation.ts`, `src/distill/jobs.ts`
-- Severity: high
-- Target branch: `impl/activity-and-curation-audit`
-- Acceptance criteria:
-- projection success emits an audit event
-- capture failures emit audit events
-- tag add/remove emits audit events
-- label toggle emits audit events
-- sync lifecycle emits audit events
+- Status: resolved in the current implementation.
+- Historical rule: `activity_events` must cover capture, failure, projection, manual curation, export, and sync lifecycle.
+- Resolution notes:
+- projection success emits `projection_replaced`
+- capture failures emit `capture_failed`
+- tag add/remove emits `tag_added` and `tag_removed`
+- label enable/disable emits `label_toggled`
+- sync jobs emit `sync_queued`, `sync_started`, `sync_completed`, and `sync_failed`
+- Implemented in: `src/distill/import.ts`, `src/distill/export.ts`, `src/distill/curation.ts`, `src/distill/jobs.ts`
 
 ## GAP-005: Jobs And Logs Overlap With Audit Semantics
 
-- Canonical rule: jobs and logs are operational views; `activity_events` are the canonical audit trail.
-- Current behavior: logs are driven mainly by `jobs` and `exports`; warning-only sync outcomes are inferred in the UI, but jobs/logs do not yet preserve a first-class `warning` status distinct from fatal errors.
-- Impacted files: `src/distill/jobs.ts`, `src/distill/logs.ts`, `src/renderer/app.ts`
-- Severity: medium
-- Target branch: `impl/activity-and-curation-audit`
-- Acceptance criteria:
-- audit and operational responsibilities are cleanly separated
-- logs remain useful without becoming the source of truth for domain events
-- warning-only sync outcomes remain visible as non-fatal operational state
-- discrepancies between jobs/logs/activity are test-covered
+- Status: resolved in the current implementation.
+- Historical rule: jobs and logs are operational views; `activity_events` are the canonical audit trail.
+- Resolution notes:
+- sync lifecycle domain events are written to `activity_events`
+- jobs remain the operational execution record
+- logs remain an operational surface derived from jobs and exports
+- warning-only sync outcomes are stored and surfaced as first-class `warning` job/log state without being treated as fatal errors
+- legacy `completed` job rows with failure details are read back as warning state for backward compatibility
+- Implemented in: `src/distill/jobs.ts`, `src/distill/logs.ts`, `src/renderer/app.ts`, `src/shared/types.ts`
 
 ## GAP-006: Manual Curation Is Not Audited
 
-- Canonical rule: manual tags and labels are canonical curation actions and must be auditable.
-- Current behavior: manual tags and labels mutate curation tables without writing activity records.
-- Impacted files: `src/distill/curation.ts`, `src/distill/query.ts`, `src/test/query.test.ts`
-- Severity: high
-- Target branch: `impl/activity-and-curation-audit`
-- Acceptance criteria:
+- Status: resolved in the current implementation.
+- Historical rule: manual tags and labels are canonical curation actions and must be auditable.
+- Resolution notes:
 - every manual tag add/remove is audited
-- every manual label toggle is audited
-- session detail and export behavior stays unchanged except for added auditability
+- every manual label enable/disable is audited
+- session detail and export behavior remain unchanged apart from added auditability
+- invalid session ids now remain true no-ops and do not create partial curation side effects
+- Implemented in: `src/distill/curation.ts`, `src/test/activity_audit.test.ts`, `src/test/export.test.ts`, `src/test/query.test.ts`
 
 ## GAP-007: Artifact Linkage Is Partial
 

@@ -27,9 +27,16 @@ import {
 
 const PARSER_VERSION = "v0";
 
+type RunImportOptions = {
+  syncJobId?: number;
+  syncReason?: string;
+};
+
 function insertSyncFailureAuditEvent(
   db: DatabaseSync,
   input: {
+    syncJobId?: number;
+    syncReason?: string;
     sourceKind: string;
     stage: "detect" | "discover";
     sourcePath: string;
@@ -39,7 +46,9 @@ function insertSyncFailureAuditEvent(
   insertActivityEvent(db, {
     eventType: "sync_failed",
     objectType: "sync_job",
+    objectId: input.syncJobId ?? null,
     payload: {
+      reason: input.syncReason,
       sourceKind: input.sourceKind,
       stage: input.stage,
       sourcePath: input.sourcePath,
@@ -307,7 +316,7 @@ function importSourceCaptures(
   };
 }
 
-export function runImport(): ImportReport {
+export function runImport(options: RunImportOptions = {}): ImportReport {
   const distillDb = openDistillDatabase();
   try {
     const sourceSummaries: ImportReport["sourceSummaries"] = [];
@@ -322,6 +331,8 @@ export function runImport(): ImportReport {
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
         insertSyncFailureAuditEvent(distillDb.db, {
+          syncJobId: options.syncJobId,
+          syncReason: options.syncReason,
           sourceKind: connector.kind,
           stage: "detect",
           sourcePath: connector.kind,
@@ -354,6 +365,8 @@ export function runImport(): ImportReport {
       } catch (error) {
         const errorText = error instanceof Error ? error.message : String(error);
         insertSyncFailureAuditEvent(distillDb.db, {
+          syncJobId: options.syncJobId,
+          syncReason: options.syncReason,
           sourceKind: source.kind,
           stage: "discover",
           sourcePath: source.dataRoot ?? connector.kind,
