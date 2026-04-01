@@ -100,7 +100,8 @@ test("gap register and contract test matrix track the required drift-guard surfa
     "GAP-005",
     "GAP-006",
     "GAP-007",
-    "GAP-008"
+    "GAP-008",
+    "GAP-009"
   ]) {
     assert.match(gapRegister, new RegExp(gapId));
   }
@@ -111,12 +112,17 @@ test("gap register and contract test matrix track the required drift-guard surfa
     "projection_replacement",
     "activity_audit",
     "search_indexing",
+    "session_read_model",
     "manual_curation",
     "export_contract",
     "sync_jobs_and_logs",
     "doc_truthfulness"
   ]) {
     assert.match(testMatrix, new RegExp(suiteName));
+  }
+
+  for (const scenarioId of ["SRM-001", "EC-003"]) {
+    assert.match(testMatrix, new RegExp(scenarioId));
   }
 
   assert.match(governance, /Authority Order/);

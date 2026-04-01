@@ -196,7 +196,7 @@ export function parseClaudeCodeCapture(capture: DiscoveredCapture, snapshot: Cap
     session: {
       sourceKind: "claude_code",
       externalSessionId: resolvedSessionId,
-      title: pickClaudeTitle(sessionId, historyIndex, messages),
+      title: pickClaudeTitle(resolvedSessionId, historyIndex, messages),
       projectPath,
       gitBranch,
       startedAt,

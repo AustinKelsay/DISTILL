@@ -169,7 +169,7 @@ function backfillArtifactMessageLinks(db: DatabaseSync): void {
       FROM messages m
       WHERE m.session_id = artifacts.session_id
       AND m.capture_record_id = artifacts.capture_record_id
-      ORDER BY m.ordinal ASC
+      ORDER BY m.ordinal DESC
       LIMIT 1
     )
     WHERE message_id IS NULL
@@ -211,9 +211,16 @@ export function runInTransaction<T>(db: DatabaseSync, fn: () => NonPromise<T>): 
     then: (...args: unknown[]) => unknown;
   };
 
-  db.exec("BEGIN");
+  if (fn.constructor?.name === "AsyncFunction") {
+    throw new Error("runInTransaction does not support async functions");
+  }
+
+  let transactionOpen = false;
 
   try {
+    db.exec("BEGIN");
+    transactionOpen = true;
+
     const result = fn();
     if (
       (typeof result === "object" || typeof result === "function")
@@ -225,12 +232,15 @@ export function runInTransaction<T>(db: DatabaseSync, fn: () => NonPromise<T>): 
     }
 
     db.exec("COMMIT");
+    transactionOpen = false;
     return result;
   } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // Preserve the original transaction error below.
+    if (transactionOpen) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original transaction error below.
+      }
     }
 
     throw error;

@@ -88,3 +88,14 @@ All gaps currently listed here are historical. No open spec-alignment gaps are c
 - informative files stop claiming stale implementation gaps that have already been closed
 - discovery remains explicitly non-normative and machine-specific
 - Implemented in: `README.md`, `PLAN.md`, `IMPLEMENTATION.md`, `DISCOVERY.md`, `src/test/docs.test.ts`
+
+## GAP-009: Projection Fidelity Was Missing From Session Detail And Export
+
+- Status: resolved in the current implementation.
+- Historical rule: session detail and labeled export must preserve session-level projection metadata and per-message transcript semantics from the current materialized projection.
+- Resolution notes:
+- session detail now exposes `external_session_id`, `started_at`, `source_url`, `summary`, `raw_capture_count`, and parsed session metadata
+- malformed legacy `metadata_json` values in session rows now read back as `{}` instead of breaking the read model
+- labeled export now includes `source_url`, `summary`, parsed session metadata, and per-message `message_kind` plus parsed message metadata
+- export payload ordering now lists labels before tags to match the canonical curation precedence guidance
+- Implemented in: `docs/specs/search-curation-export.md`, `docs/testing/contract-test-matrix.md`, `src/shared/types.ts`, `src/distill/query.ts`, `src/distill/export.ts`, `src/renderer/app.ts`, `src/test/query.test.ts`, `src/test/export.test.ts`, `src/test/docs.test.ts`

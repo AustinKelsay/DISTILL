@@ -13,6 +13,7 @@ Where a `Primary Branch` or `Target Branch` is listed below, it records the firs
 | `projection_replacement` | Validate replace-on-success and rollback-on-failure projection semantics. | `test/raw-capture-contracts` |
 | `activity_audit` | Validate canonical audit event coverage. | `impl/activity-and-curation-audit` |
 | `search_indexing` | Validate FTS and query behavior against the current projection. | `impl/query-and-search-alignment` |
+| `session_read_model` | Validate session detail exposes projection metadata and provenance safely. | `impl/projection-fidelity-export` |
 | `manual_curation` | Validate manual tags and labels as the normative curation layer. | `docs/test-matrix` |
 | `export_contract` | Validate export payloads against the current projection and manual curation state. | `docs/test-matrix` |
 | `sync_jobs_and_logs` | Validate operational sync reporting without treating logs as the canonical audit trail. | `docs/test-matrix` |
@@ -59,10 +60,12 @@ Every fixture must document:
 | `AA-004` | `activity_audit` | Sync lifecycle emits canonical audit rows. | `activity_events` includes `sync_queued`, `sync_started`, `sync_completed`, or `sync_failed`. | Audit and ops summaries can be reconciled. | Test fails if sync lifecycle is visible only through jobs. | `impl/activity-and-curation-audit` |
 | `SI-001` | `search_indexing` | Search returns current projected transcript rows only. | FTS rows correspond to current message projection. | Search results exclude stale superseded rows. | Test fails if replaced messages remain searchable. | `impl/query-and-search-alignment` |
 | `SI-002` | `search_indexing` | Search safely handles punctuation-heavy and zero-token queries. | No DB corruption or invalid FTS query state. | Results still resolve for quoted and dashed input, and all-non-token input returns no results. | Test fails if queries crash, over-match, or treat zero-token input as a broad query. | `impl/query-and-search-alignment` |
+| `SRM-001` | `session_read_model` | Session detail exposes stored projection metadata safely. | Session row fields remain readable and malformed legacy `metadata_json` reads back as `{}`. | Session detail includes external session id, timestamps, source URL, summary, raw capture count, and parsed session metadata from the current projection. | Test fails if session detail hides projection metadata or bad JSON breaks the read model. | `impl/projection-fidelity-export` |
 | `MC-001` | `manual_curation` | Manual tags appear in session detail and export. | Tag rows and assignments exist with manual origin. | Session detail and export payloads agree. | Test fails if export and detail diverge. | `docs/test-matrix` |
 | `MC-002` | `manual_curation` | Manual labels remain session-level only. | Label assignments target sessions and preserve origin. | Export-by-label matches session detail state. | Test fails if label scope drifts silently. | `docs/test-matrix` |
 | `EC-001` | `export_contract` | Export uses current session projection, not raw history. | Export bookkeeping row exists; payload matches current projection. | Exported messages equal current session detail transcript. | Test fails if superseded rows appear in output. | `docs/test-matrix` |
 | `EC-002` | `export_contract` | Export includes manual curation metadata. | Export row and output include tags and labels. | Consumers can trust export metadata without re-querying Distill. | Test fails if tags/labels are missing or inconsistent. | `docs/test-matrix` |
+| `EC-003` | `export_contract` | Export preserves projection metadata and per-message transcript semantics. | Export payload includes session metadata plus message kind and message metadata from the current projection. | Consumers can distinguish text from meta messages and recover session provenance without re-querying Distill. | Test fails if export drops session metadata, collapses `message_kind`, or omits message metadata. | `impl/projection-fidelity-export` |
 | `SL-001` | `sync_jobs_and_logs` | Sync job summaries remain operational, not canonical audit. | Job rows contain sync status and metrics. | Logs show sync state while audit remains the source of truth. | Test fails if log behavior depends on missing audit guarantees. | `docs/test-matrix` |
 | `SL-002` | `sync_jobs_and_logs` | Export summaries remain visible in logs. | Export bookkeeping is preserved. | Logs show operational export summaries. | Test fails if export operations disappear from ops surfaces. | `docs/test-matrix` |
 | `SL-003` | `sync_jobs_and_logs` | Warning-only syncs remain visible as non-fatal warnings. | Job/log surfaces preserve `status = "warning"` plus sync metrics and warning details without flipping canonical audit. | Operators can distinguish partial success from fatal sync failure. | Test fails if warning-only syncs are treated as errors or disappear from ops surfaces. | `docs/test-matrix` |
@@ -86,6 +89,7 @@ For every executable scenario, the test implementation should explicitly assert:
 
 - session list title and preview behavior where relevant
 - session detail transcript correctness
+- session detail projection metadata and provenance visibility
 - artifact visibility and linkage
 - search result freshness after re-imports
 - export payload correctness

@@ -4,18 +4,21 @@ import { ensureDefaultLabels } from "./curation";
 import { openDistillDatabase } from "./db";
 import { ensureDirectory } from "./fs";
 import { getDistillHome } from "./paths";
-import { ExportReport } from "../shared/types";
+import { ExportMessageRecord, ExportReport, ExportSessionRecord } from "../shared/types";
 
 type ExportSessionRow = {
   id: number;
-  source_kind: string;
+  source_kind: ExportSessionRecord["source"];
   external_session_id: string;
   title: string | null;
   project_path: string | null;
   updated_at: string | null;
   started_at: string | null;
+  source_url: string | null;
   model: string | null;
   git_branch: string | null;
+  summary: string | null;
+  metadata_json: string | null;
 };
 
 type ExportMessageRow = {
@@ -23,10 +26,21 @@ type ExportMessageRow = {
   role: string;
   text: string;
   created_at: string | null;
+  message_kind: "text" | "meta";
+  metadata_json: string | null;
 };
 
 function makeSafeStem(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function parseJsonObject(jsonText: string | null | undefined): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(jsonText ?? "") as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function buildTurnPairs(messages: ExportMessageRow[]): Array<{
@@ -83,8 +97,11 @@ export function exportSessionsByLabel(label: string): ExportReport {
           s.project_path,
           s.updated_at,
           s.started_at,
+          s.source_url,
           s.model,
-          s.git_branch
+          s.git_branch,
+          s.summary,
+          s.metadata_json
         FROM sessions s
         JOIN sources so ON so.id = s.source_id
         JOIN label_assignments la ON la.object_type = 'session' AND la.object_id = s.id
@@ -99,7 +116,7 @@ export function exportSessionsByLabel(label: string): ExportReport {
     for (const session of sessionRows) {
       const messages = distillDb.db
         .prepare(`
-          SELECT ordinal, role, text, created_at
+          SELECT ordinal, role, text, created_at, message_kind, metadata_json
           FROM messages
           WHERE session_id = ?
           ORDER BY ordinal ASC
@@ -128,27 +145,36 @@ export function exportSessionsByLabel(label: string): ExportReport {
         `)
         .all(session.id) as Array<{ name: string }>;
 
+      const messageRecords: ExportMessageRecord[] = messages.map((message) => ({
+        ordinal: message.ordinal,
+        role: message.role,
+        text: message.text,
+        created_at: message.created_at,
+        message_kind: message.message_kind,
+        metadata: parseJsonObject(message.metadata_json)
+      }));
+
+      const record: ExportSessionRecord = {
+        exported_at: exportedAt,
+        source: session.source_kind,
+        external_session_id: session.external_session_id,
+        title: session.title,
+        project_path: session.project_path,
+        updated_at: session.updated_at,
+        started_at: session.started_at,
+        source_url: session.source_url,
+        model: session.model,
+        git_branch: session.git_branch,
+        summary: session.summary,
+        metadata: parseJsonObject(session.metadata_json),
+        labels: labels.map((entry) => entry.name),
+        tags: tags.map((tag) => tag.name),
+        messages: messageRecords,
+        turn_pairs: buildTurnPairs(messages)
+      };
+
       lines.push(
-        JSON.stringify({
-          exported_at: exportedAt,
-          source: session.source_kind,
-          external_session_id: session.external_session_id,
-          title: session.title,
-          project_path: session.project_path,
-          updated_at: session.updated_at,
-          started_at: session.started_at,
-          model: session.model,
-          git_branch: session.git_branch,
-          tags: tags.map((tag) => tag.name),
-          labels: labels.map((entry) => entry.name),
-          messages: messages.map((message) => ({
-            ordinal: message.ordinal,
-            role: message.role,
-            text: message.text,
-            created_at: message.created_at
-          })),
-          turn_pairs: buildTurnPairs(messages)
-        })
+        JSON.stringify(record)
       );
     }
 

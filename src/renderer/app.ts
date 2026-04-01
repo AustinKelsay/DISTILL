@@ -217,7 +217,8 @@ function syncStatusTone(status: BackgroundSyncStatus | undefined): "idle" | "que
   }
 
   if (
-    status.state === "queued"
+    status.state === "idle"
+    || status.state === "queued"
     || status.state === "running"
     || status.state === "warning"
     || status.state === "failed"
@@ -236,6 +237,28 @@ function formatDateTime(dateStr: string | undefined): string {
     hour: "numeric",
     minute: "2-digit"
   });
+}
+
+function renderDetailContextRow(label: string, value: string, kind: "value" | "copy" = "value"): string {
+  return `
+    <div class="detail-context-row">
+      <div class="detail-context-label">${escapeHtml(label)}</div>
+      <div class="${kind === "copy" ? "detail-context-copy" : "detail-context-value"}">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+function renderDetailContextFullRow(label: string, content: string, kind: "value" | "copy" | "json"): string {
+  const valueHtml =
+    kind === "json" ? `<pre class="detail-context-json">${escapeHtml(content)}</pre>`
+    : `<div class="${kind === "copy" ? "detail-context-copy" : "detail-context-value"}">${escapeHtml(content)}</div>`;
+
+  return `
+    <div class="detail-context-row detail-context-row--full">
+      <div class="detail-context-label">${escapeHtml(label)}</div>
+      ${valueHtml}
+    </div>
+  `;
 }
 
 function logStatusBadgeClass(entry: LogEntry): string {
@@ -1679,6 +1702,32 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     `
     : "";
 
+  const projectionMetadataRows = [
+    renderDetailContextRow("External session", detail.externalSessionId),
+    renderDetailContextRow("Raw captures", detail.rawCaptureCount.toString()),
+    detail.startedAt ? renderDetailContextRow("Started", formatDateTime(detail.startedAt)) : "",
+    detail.sourceUrl ? renderDetailContextRow("Source URL", detail.sourceUrl) : ""
+  ].filter(Boolean).join("");
+
+  const projectionMetadataExtras = [
+    detail.summary ? renderDetailContextFullRow("Summary", detail.summary, "copy") : "",
+    Object.keys(detail.metadata).length > 0
+      ? renderDetailContextFullRow("Provenance", JSON.stringify(detail.metadata, null, 2), "json")
+      : ""
+  ].filter(Boolean).join("");
+
+  const projectionMetadata = projectionMetadataRows || projectionMetadataExtras
+    ? `
+      <section class="detail-context">
+        <div class="section-title">Projection metadata</div>
+        <div class="detail-context-grid">
+          ${projectionMetadataRows}
+          ${projectionMetadataExtras}
+        </div>
+      </section>
+    `
+    : "";
+
   root.innerHTML = `
     <div class="fade-in">
     <div class="detail-toolbar">
@@ -1715,6 +1764,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
         </form>
       </div>
     </div>
+    ${projectionMetadata}
     ${artifacts}
     <div class="message-list">${messages}</div>
     </div>

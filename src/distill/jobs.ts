@@ -47,6 +47,10 @@ function deriveSyncState(status: string, payload: SyncPayload): BackgroundSyncSt
   }
 
   if (status === "completed") {
+    if (payload.outcome) {
+      return payload.outcome;
+    }
+
     return hasSyncWarnings(payload) ? "warning" : "completed";
   }
 
@@ -375,7 +379,7 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
         );
         insertSyncJobAuditEvent(completeDb.db, {
           eventType: "sync_completed",
-          jobId: jobId ?? 0,
+          jobId,
           payload: {
             reason,
             discoveredCaptures: status.discoveredCaptures,
@@ -423,7 +427,7 @@ export function runNextSourceSyncJob(): BackgroundSyncStatus {
         );
         insertSyncJobAuditEvent(failedDb.db, {
           eventType: "sync_failed",
-          jobId: jobId ?? 0,
+          jobId,
           payload: {
             reason,
             errorText,

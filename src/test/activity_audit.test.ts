@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addSessionTag, removeSessionTag, toggleSessionLabel } from "../distill/curation";
+import { addSessionTag, ensureDefaultLabels, removeSessionTag, toggleSessionLabel } from "../distill/curation";
 import { openDistillDatabase } from "../distill/db";
 
 function withTempDistill<T>(fn: (root: string) => T): T {
@@ -107,6 +107,47 @@ test("removeSessionTag audits actual deletions and ignores missing assignments",
   });
 });
 
+test("removeSessionTag ignores derived assignments and emits no manual removal audit", () => {
+  withTempDistill(() => {
+    seedSession(13);
+
+    let tagId = 0;
+    const seededDb = openDistillDatabase();
+    try {
+      tagId = (seededDb.db
+        .prepare("INSERT INTO tags (name, kind) VALUES ('derived', 'general') RETURNING id")
+        .get() as { id: number }).id;
+
+      seededDb.db.prepare(`
+        INSERT INTO tag_assignments (object_type, object_id, tag_id, origin)
+        VALUES ('session', 13, ?, 'auto_rule')
+      `).run(tagId);
+    } finally {
+      seededDb.close();
+    }
+
+    removeSessionTag(13, tagId);
+
+    const verifyDb = openDistillDatabase();
+    try {
+      const assignments = verifyDb.db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM tag_assignments
+        WHERE object_type = 'session' AND object_id = 13
+      `).get() as { count: number };
+      const events = verifyDb.db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM activity_events
+      `).get() as { count: number };
+
+      assert.equal(assignments.count, 1);
+      assert.equal(events.count, 0);
+    } finally {
+      verifyDb.close();
+    }
+  });
+});
+
 test("toggleSessionLabel audits enable and disable transitions", () => {
   withTempDistill(() => {
     seedSession(12);
@@ -139,6 +180,53 @@ test("toggleSessionLabel audits enable and disable transitions", () => {
       assert.equal(disabledPayload.enabled, false);
     } finally {
       distillDb.close();
+    }
+  });
+});
+
+test("toggleSessionLabel ignores derived assignments when no manual label exists", () => {
+  withTempDistill(() => {
+    seedSession(14);
+    ensureDefaultLabels();
+
+    const seededDb = openDistillDatabase();
+    try {
+      const label = seededDb.db
+        .prepare("SELECT id FROM labels WHERE name = 'train' LIMIT 1")
+        .get() as { id: number };
+
+      seededDb.db.prepare(`
+        INSERT INTO label_assignments (object_type, object_id, label_id, origin)
+        VALUES ('session', 14, ?, 'model')
+      `).run(label.id);
+    } finally {
+      seededDb.close();
+    }
+
+    toggleSessionLabel(14, "train");
+
+    const verifyDb = openDistillDatabase();
+    try {
+      const assignments = verifyDb.db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM label_assignments
+        WHERE object_type = 'session' AND object_id = 14
+      `).get() as { count: number };
+      const manualAssignments = verifyDb.db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM label_assignments
+        WHERE object_type = 'session' AND object_id = 14 AND origin = 'manual'
+      `).get() as { count: number };
+      const events = verifyDb.db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM activity_events
+      `).get() as { count: number };
+
+      assert.equal(assignments.count, 1);
+      assert.equal(manualAssignments.count, 0);
+      assert.equal(events.count, 0);
+    } finally {
+      verifyDb.close();
     }
   });
 });

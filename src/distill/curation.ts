@@ -127,6 +127,7 @@ export function removeSessionTag(sessionId: number, tagId: number): void {
           WHERE ta.object_type = 'session'
           AND ta.object_id = ?
           AND ta.tag_id = ?
+          AND ta.origin = 'manual'
           LIMIT 1
         `)
         .get(sessionId, tagId) as { id: number; name: string } | undefined;
@@ -187,6 +188,7 @@ export function toggleSessionLabel(sessionId: number, labelName: string): void {
           WHERE object_type = 'session'
           AND object_id = ?
           AND label_id = ?
+          AND origin = 'manual'
           LIMIT 1
         `)
         .get(sessionId, label.id) as { id: number } | undefined;
@@ -216,6 +218,7 @@ export function toggleSessionLabel(sessionId: number, labelName: string): void {
         .prepare(`
           INSERT INTO label_assignments (object_type, object_id, label_id, origin)
           VALUES ('session', ?, ?, 'manual')
+          ON CONFLICT(object_type, object_id, label_id) DO NOTHING
           RETURNING id
         `)
         .get(sessionId, label.id) as { id: number } | undefined;

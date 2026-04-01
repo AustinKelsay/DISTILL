@@ -238,6 +238,51 @@ test("parseCodexCapture records synthetic external session id provenance when th
   });
 });
 
+test("parseClaudeCodeCapture uses the resolved fallback session id for history title lookup", () => {
+  withTempHomes((root) => {
+    const claudeHome = path.join(root, ".claude");
+    ensureDirectory(path.join(claudeHome, "projects", "demo"));
+    fs.writeFileSync(
+      path.join(claudeHome, "history.jsonl"),
+      `${JSON.stringify({
+        display: "Recovered from history",
+        timestamp: 1,
+        project: "/tmp/demo",
+        sessionId: "synthetic-claude-session"
+      })}\n`
+    );
+
+    const capturePath = path.join(claudeHome, "projects", "demo", "synthetic-claude-session.jsonl");
+    fs.writeFileSync(
+      capturePath,
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "u1",
+          timestamp: "2026-03-25T11:00:00Z",
+          cwd: "/tmp/demo",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Fallback title from the first message" }]
+          }
+        })
+      ].join("\n")
+    );
+
+    const capture: DiscoveredCapture = {
+      sourceKind: "claude_code",
+      captureKind: "project_session",
+      sourcePath: capturePath,
+      metadata: { projectFolder: "/tmp/demo" }
+    };
+
+    const parsed = parseClaudeCodeCapture(capture, snapshotClaudeCodeCapture(capture));
+
+    assert.equal(parsed.session.externalSessionId, "synthetic-claude-session");
+    assert.equal(parsed.session.title, "Recovered from history");
+  });
+});
+
 test("parseClaudeCodeCapture filters command noise and derives a useful title", () => {
   withTempHomes((root) => {
     const claudeHome = path.join(root, ".claude");

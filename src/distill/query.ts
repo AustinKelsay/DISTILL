@@ -11,17 +11,30 @@ import {
   SessionTag
 } from "../shared/types";
 
-type SessionRow = {
+type SessionPreviewFields = {
+  title: string | null;
+  first_user_text: string | null;
+  first_assistant_text: string | null;
+};
+
+type SessionListRow = SessionPreviewFields & {
   id: number;
   source_kind: SessionListItem["sourceKind"];
-  title: string | null;
   project_path: string | null;
   updated_at: string | null;
   message_count: number;
   model: string | null;
   git_branch: string | null;
-  first_user_text: string | null;
-  first_assistant_text: string | null;
+};
+
+type SessionDetailRow = SessionListRow & {
+  external_session_id: string;
+  source_url: string | null;
+  started_at: string | null;
+  raw_capture_count: number;
+  summary: string | null;
+  metadata_json: string | null;
+  artifact_count: number;
 };
 
 type SessionMessageRow = {
@@ -84,7 +97,7 @@ function cleanExcerpt(text: string | null | undefined, maxLength: number): strin
   return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1).trimEnd()}…` : cleaned;
 }
 
-function deriveSessionTitle(row: SessionRow): string {
+function deriveSessionTitle(row: SessionPreviewFields): string {
   const directTitle = row.title?.trim();
   if (directTitle) {
     return directTitle;
@@ -98,7 +111,7 @@ function deriveSessionTitle(row: SessionRow): string {
   return "Untitled session";
 }
 
-function deriveSessionPreview(row: SessionRow): string | undefined {
+function deriveSessionPreview(row: SessionPreviewFields): string | undefined {
   return cleanExcerpt(row.first_assistant_text, 280) ?? cleanExcerpt(row.first_user_text, 280);
 }
 
@@ -129,13 +142,17 @@ function clampValue(value: unknown, depth = 0): unknown {
   return value;
 }
 
-function parseArtifactPayload(metadataJson: string): Record<string, unknown> {
+function parseJsonObject(jsonText: string | null | undefined): Record<string, unknown> {
   try {
-    const payload = JSON.parse(metadataJson) as Record<string, unknown>;
+    const payload = JSON.parse(jsonText ?? "") as Record<string, unknown>;
     return payload && typeof payload === "object" ? payload : {};
   } catch {
     return {};
   }
+}
+
+function parseArtifactPayload(metadataJson: string): Record<string, unknown> {
+  return parseJsonObject(metadataJson);
 }
 
 function payloadText(payload: Record<string, unknown>): string | undefined {
@@ -263,7 +280,7 @@ export function listRecentSessions(limit = 24): SessionListItem[] {
         ORDER BY COALESCE(s.updated_at, s.updated_recorded_at) DESC
         LIMIT ?
       `)
-      .all(limit) as SessionRow[];
+      .all(limit) as SessionListRow[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -289,12 +306,18 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
         SELECT
           s.id,
           so.kind AS source_kind,
+          s.external_session_id,
           s.title,
           s.project_path,
+          s.source_url,
+          s.started_at,
           s.updated_at,
           s.message_count,
+          s.raw_capture_count,
           s.model,
           s.git_branch,
+          s.summary,
+          s.metadata_json,
           (
             SELECT m.text
             FROM messages m
@@ -322,7 +345,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
         JOIN sources so ON so.id = s.source_id
         WHERE s.id = ?
       `)
-      .get(sessionId) as (SessionRow & { artifact_count: number }) | undefined;
+      .get(sessionId) as SessionDetailRow | undefined;
 
     if (!row) {
       return undefined;
@@ -381,13 +404,19 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
     return {
       id: row.id,
       sourceKind: row.source_kind,
+      externalSessionId: row.external_session_id,
       title: deriveSessionTitle(row),
       projectPath: row.project_path ?? undefined,
+      startedAt: row.started_at ?? undefined,
       updatedAt: row.updated_at ?? undefined,
+      sourceUrl: row.source_url ?? undefined,
       messageCount: row.message_count,
+      rawCaptureCount: row.raw_capture_count,
       model: row.model ?? undefined,
       gitBranch: row.git_branch ?? undefined,
+      summary: row.summary ?? undefined,
       preview: deriveSessionPreview(row),
+      metadata: parseJsonObject(row.metadata_json),
       artifactCount: row.artifact_count,
       tags: tags.map(
         (tag): SessionTag => ({

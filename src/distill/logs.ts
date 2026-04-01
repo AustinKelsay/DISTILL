@@ -38,6 +38,7 @@ type SyncPayload = {
   summary?: string;
   sourceSummaries?: ImportSourceSummary[];
   failedEntries?: ImportFailureEntry[];
+  outcome?: "completed" | "warning" | "failed";
 };
 
 type ExportPayload = {
@@ -67,6 +68,10 @@ function normalizeSyncStatus(status: string, payload: SyncPayload): LogEntryStat
   }
 
   if (status === "completed") {
+    if (payload.outcome) {
+      return payload.outcome;
+    }
+
     return hasSyncWarnings(payload) ? "warning" : "completed";
   }
 

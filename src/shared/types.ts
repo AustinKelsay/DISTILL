@@ -164,6 +164,37 @@ export type ExportReport = {
   recordCount: number;
 };
 
+export type ExportMessageRecord = {
+  ordinal: number;
+  role: string;
+  text: string;
+  created_at: string | null;
+  message_kind: "text" | "meta";
+  metadata: Record<string, unknown>;
+};
+
+export type ExportSessionRecord = {
+  exported_at: string;
+  source: SourceKind;
+  external_session_id: string;
+  title: string | null;
+  project_path: string | null;
+  updated_at: string | null;
+  started_at: string | null;
+  source_url: string | null;
+  model: string | null;
+  git_branch: string | null;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  labels: string[];
+  tags: string[];
+  messages: ExportMessageRecord[];
+  turn_pairs: Array<{
+    user: string;
+    assistant: string;
+  }>;
+};
+
 export type BackgroundSyncStatus = {
   state: "idle" | "queued" | "running" | "warning" | "completed" | "failed";
   jobId?: number;
@@ -444,13 +475,19 @@ export type SessionArtifact = {
 export type SessionDetail = {
   id: number;
   sourceKind: SourceKind;
+  externalSessionId: string;
   title: string;
   projectPath?: string;
+  startedAt?: string;
   updatedAt?: string;
+  sourceUrl?: string;
   messageCount: number;
+  rawCaptureCount: number;
   model?: string;
   gitBranch?: string;
+  summary?: string;
   preview?: string;
+  metadata: Record<string, unknown>;
   artifactCount: number;
   tags: SessionTag[];
   labels: SessionLabel[];

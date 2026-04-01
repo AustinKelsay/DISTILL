@@ -130,6 +130,39 @@ test("getLogsPageData surfaces legacy completed rows with failures as warning st
   });
 });
 
+test("getLogsPageData prefers the persisted warning outcome when failure counts are zero", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO jobs (
+        id, job_type, object_type, object_id, status, attempts, run_after, last_error, payload_json, created_at, updated_at
+      ) VALUES (
+        1, 'sync_sources', 'system', 1, 'completed', 1, CURRENT_TIMESTAMP, NULL, ?, '2026-03-26T09:00:00Z', '2026-03-26T09:02:00Z'
+      )
+    `).run(JSON.stringify({
+      reason: "manual",
+      startedAt: "2026-03-26T09:00:00Z",
+      finishedAt: "2026-03-26T09:02:00Z",
+      discoveredCaptures: 4,
+      importedCaptures: 4,
+      skippedCaptures: 0,
+      failedCaptures: 0,
+      summary: "Sync warnings",
+      failedEntries: [],
+      outcome: "warning"
+    }));
+
+    distillDb.close();
+
+    const logs = getLogsPageData();
+
+    assert.equal(logs.entries[0]?.status, "warning");
+    assert.equal(logs.lastSyncStatus?.state, "warning");
+  });
+});
+
 test("exportSessionsByLabel entries appear in the logs feed", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();

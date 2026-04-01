@@ -52,12 +52,17 @@ The query layer may expose list and detail read models, but those read models mu
 Session detail must support:
 
 - title
+- external session id
 - project path
 - source kind
-- timestamps available from the current projection
+- timestamps available from the current projection, including `started_at` and `updated_at` when present
+- source URL when present in the current projection
+- session summary when present in the current projection
+- raw capture count from the current projection
+- parsed session metadata from the current projection
 - ordered messages
-- manual tags
 - manual labels
+- manual tags
 - artifacts
 
 ## Manual Tags
@@ -107,10 +112,10 @@ Required export content:
 
 - source kind
 - external session id
-- session metadata from the current projection
-- ordered projected messages
-- manual tags
+- session metadata from the current projection, including `source_url`, `summary`, and parsed session metadata when present
+- ordered projected messages with ordinal, role, text, created timestamp, `message_kind`, and parsed message metadata
 - manual labels
+- manual tags
 - turn-pair representation when derivable
 
 Current canonical turn-pair representation is:
@@ -134,6 +139,8 @@ Derivation algorithm:
 This intentionally mirrors the current implementation rather than a richer future pairing model.
 
 Export source truth is the current session projection, not raw capture history.
+
+For compatibility, additive export fields may be introduced without renaming existing top-level fields, but any exported session or message metadata must still come from the current projection only.
 
 ## Explicit Out-Of-Scope Items
 

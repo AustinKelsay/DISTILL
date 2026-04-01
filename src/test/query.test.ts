@@ -96,6 +96,64 @@ test("query layer ignores meta messages when deriving session previews", () => {
   });
 });
 
+test("query layer exposes projection metadata on session detail and tolerates malformed legacy metadata", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES
+      (5, 'opencode', 'OpenCode', 'installed', '2026-03-25T00:00:00Z', '{}'),
+      (6, 'codex', 'Codex', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, source_url, started_at, updated_at,
+        message_count, raw_capture_count, summary, metadata_json
+      ) VALUES
+      (
+        12, 5, 'session-projection', 'Projection rich session', '/tmp/demo',
+        'https://example.test/session/12', '2026-03-25T12:00:00Z', '2026-03-25T12:30:00Z',
+        1, 3, 'Preserve projection metadata in the detail view.',
+        '{"capturePath":"opencode://session/session-projection","externalSessionIdProvenance":{"kind":"source"}}'
+      ),
+      (
+        13, 6, 'session-bad-metadata', 'Legacy bad metadata', '/tmp/legacy',
+        NULL, NULL, '2026-03-25T12:31:00Z', 0, 1, NULL, 'not-json'
+      )
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (12, 1, 'user', 'Inspect the stored metadata.', 'meta-1', '2026-03-25T12:01:00Z', 'text', '{}')
+    `).run();
+
+    const detail = getSessionDetail(12);
+    const legacyDetail = getSessionDetail(13);
+
+    assert.equal(detail?.externalSessionId, "session-projection");
+    assert.equal(detail?.startedAt, "2026-03-25T12:00:00Z");
+    assert.equal(detail?.sourceUrl, "https://example.test/session/12");
+    assert.equal(detail?.summary, "Preserve projection metadata in the detail view.");
+    assert.equal(detail?.rawCaptureCount, 3);
+    assert.deepEqual(detail?.metadata, {
+      capturePath: "opencode://session/session-projection",
+      externalSessionIdProvenance: {
+        kind: "source"
+      }
+    });
+    assert.deepEqual(legacyDetail?.metadata, {});
+    assert.equal(legacyDetail?.externalSessionId, "session-bad-metadata");
+    assert.equal(legacyDetail?.rawCaptureCount, 1);
+
+    distillDb.close();
+  });
+});
+
 test("query layer searches normalized sessions through FTS", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();

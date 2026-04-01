@@ -1547,7 +1547,7 @@ test("openDistillDatabase migrates legacy failed capture statuses to failed_pars
   });
 });
 
-test("openDistillDatabase backfills legacy artifact message links from capture provenance", () => {
+test("openDistillDatabase backfills legacy artifact message links from the last projected message for shared provenance", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
 
@@ -1568,7 +1568,7 @@ test("openDistillDatabase backfills legacy artifact message links from capture p
           id, source_id, external_session_id, title, message_count, raw_capture_count, metadata_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `)
-      .run(40, 1, "legacy-artifact-link", "Legacy artifact link", 1, 1, "{}");
+      .run(40, 1, "legacy-artifact-link", "Legacy artifact link", 2, 1, "{}");
     legacyDb
       .prepare(`
         INSERT INTO captures (
@@ -1592,6 +1592,13 @@ test("openDistillDatabase backfills legacy artifact message links from capture p
       .run(200, 40, 500, "msg-1", 1, "assistant", "Running tool", "hash-1", "2026-03-25T15:00:00Z", "text", "{}");
     legacyDb
       .prepare(`
+        INSERT INTO messages (
+          id, session_id, capture_record_id, external_message_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(201, 40, 500, "msg-1b", 2, "assistant", "Tool finished", "hash-2", "2026-03-25T15:00:02Z", "text", "{}");
+    legacyDb
+      .prepare(`
         INSERT INTO artifacts (
           session_id, message_id, capture_record_id, kind, metadata_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
@@ -1611,14 +1618,14 @@ test("openDistillDatabase backfills legacy artifact message links from capture p
       `)
       .get() as { message_id: number | null; capture_record_id: number | null };
 
-    assert.equal(artifact.message_id, 200);
+    assert.equal(artifact.message_id, 201);
     assert.equal(artifact.capture_record_id, 500);
 
     db.close();
   });
 });
 
-test("runInTransaction rejects async callbacks and rolls back their writes", () => {
+test("runInTransaction rejects async callbacks before executing their bodies", () => {
   withTempEnv(() => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -1630,14 +1637,16 @@ test("runInTransaction rejects async callbacks and rolls back their writes", () 
       )
     `);
 
-    const asyncCallback = (async () => {
+    let invoked = false;
+    const asyncCallback = async () => {
+      invoked = true;
       db.prepare("INSERT INTO tx_async_guard (value) VALUES (?)").run("leaked");
       await Promise.resolve();
       return 1;
-    }) as unknown as () => never;
+    };
 
     assert.throws(
-      () => runInTransaction(db, asyncCallback),
+      () => runInTransaction(db, asyncCallback as unknown as () => never),
       /runInTransaction does not support async functions/
     );
 
@@ -1645,6 +1654,7 @@ test("runInTransaction rejects async callbacks and rolls back their writes", () 
       .prepare("SELECT COUNT(*) AS count FROM tx_async_guard")
       .get() as { count: number };
 
+    assert.equal(invoked, false);
     assert.equal(rowCount.count, 0);
 
     distillDb.close();
