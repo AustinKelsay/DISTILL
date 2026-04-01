@@ -3,8 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { enqueueSourceSyncJob, getBackgroundSyncStatus, runNextSourceSyncJob } from "../distill/jobs";
+import * as importModule from "../distill/import";
+import { openDistillDatabase } from "../distill/db";
 import { ensureDirectory } from "../distill/fs";
+import {
+  enqueueSourceSyncJob,
+  getBackgroundSyncStatus,
+  markStaleRunningSyncJobsFailed,
+  runNextSourceSyncJob
+} from "../distill/jobs";
 import { getLogsPageData } from "../distill/logs";
 
 type SavedEnv = Record<
@@ -190,7 +197,7 @@ process.exit(1);
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
 }
 
-test("runNextSourceSyncJob includes failed capture counts in the completed summary", () => {
+test("runNextSourceSyncJob records warning sync lifecycle and surfaces non-fatal warnings", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
     writeFakeOpenCodeExecutable(
@@ -244,30 +251,195 @@ test("runNextSourceSyncJob includes failed capture counts in the completed summa
     enqueueSourceSyncJob("test");
     const status = runNextSourceSyncJob();
     const persistedStatus = getBackgroundSyncStatus();
+    const distillDb = openDistillDatabase();
 
-    assert.equal(status.state, "completed");
-    assert.equal(status.discoveredCaptures, 4);
-    assert.equal(status.importedCaptures, 3);
-    assert.equal(status.skippedCaptures, 0);
-    assert.equal(status.failedCaptures, 1);
-    assert.equal(
-      status.summary,
-      "Sync complete: 3 imported, 0 skipped, 1 failed across 4 captures"
-    );
-    assert.equal(persistedStatus.failedCaptures, 1);
-    assert.equal(
-      persistedStatus.summary,
-      "Sync complete: 3 imported, 0 skipped, 1 failed across 4 captures"
-    );
-    assert.equal(status.failedEntries?.length, 1);
-    assert.equal(status.failedEntries?.[0]?.sourceKind, "opencode");
-    assert.match(status.failedEntries?.[0]?.errorText ?? "", /missing export/);
+    try {
+      const syncEvents = distillDb.db.prepare(`
+        SELECT event_type, object_id, payload_json
+        FROM activity_events
+        WHERE object_type = 'sync_job'
+        ORDER BY id ASC
+      `).all() as Array<{ event_type: string; object_id: number | null; payload_json: string }>;
+      const completePayload = JSON.parse(syncEvents[2]?.payload_json ?? "{}") as Record<string, unknown>;
 
-    const logs = getLogsPageData();
-    const syncEntry = logs.entries.find((entry) => entry.kind === "sync");
+      assert.equal(status.state, "warning");
+      assert.equal(status.discoveredCaptures, 4);
+      assert.equal(status.importedCaptures, 3);
+      assert.equal(status.skippedCaptures, 0);
+      assert.equal(status.failedCaptures, 1);
+      assert.equal(
+        status.summary,
+        "Sync warnings: 3 imported, 0 skipped, 1 failed across 4 captures"
+      );
+      assert.equal(persistedStatus.state, "warning");
+      assert.equal(persistedStatus.failedCaptures, 1);
+      assert.equal(
+        persistedStatus.summary,
+        "Sync warnings: 3 imported, 0 skipped, 1 failed across 4 captures"
+      );
+      assert.equal(status.failedEntries?.length, 1);
+      assert.equal(status.failedEntries?.[0]?.sourceKind, "opencode");
+      assert.match(status.failedEntries?.[0]?.errorText ?? "", /missing export/);
+      assert.deepEqual(syncEvents.map((event) => event.event_type), [
+        "sync_queued",
+        "sync_started",
+        "sync_completed"
+      ]);
+      assert.equal(syncEvents.every((event) => event.object_id === status.jobId), true);
+      assert.equal(completePayload.outcome, "warning");
+      assert.equal(completePayload.failedCaptures, 1);
 
-    assert.equal(syncEntry?.status, "completed");
-    assert.equal(syncEntry?.level, "error");
-    assert.equal(syncEntry?.details?.failedEntries?.length, 1);
+      const logs = getLogsPageData();
+      const syncEntry = logs.entries.find((entry) => entry.kind === "sync");
+
+      assert.equal(syncEntry?.status, "warning");
+      assert.equal(syncEntry?.level, "info");
+      assert.equal(syncEntry?.details?.failedEntries?.length, 1);
+    } finally {
+      distillDb.close();
+    }
+  });
+});
+
+test("runNextSourceSyncJob records clean completed sync lifecycle when nothing fails", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    enqueueSourceSyncJob("manual");
+    const status = runNextSourceSyncJob();
+    const persistedStatus = getBackgroundSyncStatus();
+    const distillDb = openDistillDatabase();
+
+    try {
+      const syncEvents = distillDb.db.prepare(`
+        SELECT event_type, object_id, payload_json
+        FROM activity_events
+        WHERE object_type = 'sync_job'
+        ORDER BY id ASC
+      `).all() as Array<{ event_type: string; object_id: number | null; payload_json: string }>;
+      const completePayload = JSON.parse(syncEvents[2]?.payload_json ?? "{}") as Record<string, unknown>;
+
+      assert.equal(status.state, "completed");
+      assert.equal(status.discoveredCaptures, 2);
+      assert.equal(status.importedCaptures, 2);
+      assert.equal(status.failedCaptures, 0);
+      assert.equal(status.failedEntries?.length ?? 0, 0);
+      assert.equal(persistedStatus.state, "completed");
+      assert.deepEqual(syncEvents.map((event) => event.event_type), [
+        "sync_queued",
+        "sync_started",
+        "sync_completed"
+      ]);
+      assert.equal(completePayload.outcome, "completed");
+      assert.equal(completePayload.reason, "manual");
+
+      const logs = getLogsPageData();
+      const syncEntry = logs.entries.find((entry) => entry.kind === "sync");
+
+      assert.equal(syncEntry?.status, "completed");
+      assert.equal(syncEntry?.level, "info");
+    } finally {
+      distillDb.close();
+    }
+  });
+});
+
+test("runNextSourceSyncJob records fatal sync failures at the job level", () => {
+  withTempEnv(() => {
+    const importModuleMutable = importModule as { runImport: typeof importModule.runImport };
+    const originalRunImport = importModuleMutable.runImport;
+    importModuleMutable.runImport = () => {
+      throw new Error("job exploded");
+    };
+
+    try {
+      enqueueSourceSyncJob("manual");
+      const status = runNextSourceSyncJob();
+      const persistedStatus = getBackgroundSyncStatus();
+      const distillDb = openDistillDatabase();
+
+      try {
+        const syncEvents = distillDb.db.prepare(`
+          SELECT event_type, object_id, payload_json
+          FROM activity_events
+          WHERE object_type = 'sync_job'
+          ORDER BY id ASC
+        `).all() as Array<{ event_type: string; object_id: number | null; payload_json: string }>;
+        const failurePayload = JSON.parse(syncEvents[2]?.payload_json ?? "{}") as Record<string, unknown>;
+
+        assert.equal(status.state, "failed");
+        assert.equal(status.errorText, "job exploded");
+        assert.equal(persistedStatus.state, "failed");
+        assert.deepEqual(syncEvents.map((event) => event.event_type), [
+          "sync_queued",
+          "sync_started",
+          "sync_failed"
+        ]);
+        assert.equal(failurePayload.scope, "job");
+        assert.equal(failurePayload.fatal, true);
+        assert.equal(failurePayload.errorText, "job exploded");
+
+        const logs = getLogsPageData();
+        const syncEntry = logs.entries.find((entry) => entry.kind === "sync");
+
+        assert.equal(syncEntry?.status, "failed");
+        assert.equal(syncEntry?.level, "error");
+      } finally {
+        distillDb.close();
+      }
+    } finally {
+      importModuleMutable.runImport = originalRunImport;
+    }
+  });
+});
+
+test("markStaleRunningSyncJobsFailed records sync_failed audit rows for interrupted jobs", () => {
+  withTempEnv(() => {
+    const distillDb = openDistillDatabase();
+    try {
+      distillDb.db.prepare(`
+        INSERT INTO jobs (
+          id, job_type, object_type, object_id, status, attempts, run_after, last_error, payload_json, created_at, updated_at
+        ) VALUES (
+          1, 'sync_sources', 'system', 1, 'running', 1, CURRENT_TIMESTAMP, NULL, ?, '2026-03-25T10:00:00Z', '2026-03-25T10:01:00Z'
+        )
+      `).run(JSON.stringify({
+        reason: "startup",
+        startedAt: "2026-03-25T10:00:00Z",
+        summary: "Sync running: startup"
+      }));
+    } finally {
+      distillDb.close();
+    }
+
+    markStaleRunningSyncJobsFailed();
+    const persistedStatus = getBackgroundSyncStatus();
+    const verifyDb = openDistillDatabase();
+
+    try {
+      const job = verifyDb.db.prepare(`
+        SELECT status, last_error, payload_json
+        FROM jobs
+        WHERE id = 1
+      `).get() as { status: string; last_error: string | null; payload_json: string };
+      const events = verifyDb.db.prepare(`
+        SELECT event_type, object_id, payload_json
+        FROM activity_events
+        WHERE object_type = 'sync_job'
+        ORDER BY id ASC
+      `).all() as Array<{ event_type: string; object_id: number | null; payload_json: string }>;
+      const payload = JSON.parse(events[0]?.payload_json ?? "{}") as Record<string, unknown>;
+
+      assert.equal(job.status, "failed");
+      assert.equal(job.last_error, "Interrupted before completion");
+      assert.equal(persistedStatus.state, "failed");
+      assert.deepEqual(events.map((event) => event.event_type), ["sync_failed"]);
+      assert.equal(events[0]?.object_id, 1);
+      assert.equal(payload.scope, "job");
+      assert.equal(payload.fatal, true);
+      assert.equal(payload.errorText, "Interrupted before completion");
+    } finally {
+      verifyDb.close();
+    }
   });
 });

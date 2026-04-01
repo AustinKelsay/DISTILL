@@ -1,10 +1,10 @@
-import { exportSessionsByLabel } from "../distill/export";
+import { exportApprovedSessions } from "../distill/export";
 
 function printHelp(): void {
-  console.log("Usage: npm run export -- [label]");
+  console.log("Usage: npm run export -- [dataset]");
   console.log("");
-  console.log("Exports labeled sessions to JSONL.");
-  console.log("Defaults to the \"train\" label when no label is provided.");
+  console.log("Exports approved dataset sessions to JSONL.");
+  console.log("Defaults to the \"train\" dataset when no dataset is provided.");
 }
 
 function main(): void {
@@ -13,11 +13,11 @@ function main(): void {
     return;
   }
 
-  const label = process.argv[2] ?? "train";
-  const report = exportSessionsByLabel(label);
+  const dataset = process.argv[2] ?? "train";
+  const report = exportApprovedSessions(dataset);
 
   console.log(`Distill export at ${report.exportedAt}`);
-  console.log(`Label: ${report.label}`);
+  console.log(`Dataset: ${report.dataset}`);
   console.log(`Output: ${report.outputPath}`);
   console.log(`Records: ${report.recordCount}`);
 }

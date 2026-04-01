@@ -240,6 +240,9 @@ Canonical semantics:
 - labels decide export inclusion and review-routing behavior for a session
 - current normative assignments are session-level and manual
 - label toggling must be auditable
+- `train`, `holdout`, and `exclude` are dataset labels and are mutually exclusive
+- `sensitive` and `favorite` are orthogonal labels and may coexist with at most one dataset label
+- dataset-label exclusivity must be enforced transactionally when a manual toggle enables a conflicting dataset label
 - labels take precedence over tags when export or review behavior would otherwise conflict
 - UI surfaces should present labels before tags, and export metadata should list labels before tags
 

@@ -3,6 +3,7 @@ import {
   AppSettingsSnapshot,
   BackgroundSyncStatus,
   DashboardData,
+  DatasetExportTarget,
   DbBrowseRequest,
   DbBrowseResult,
   DbColumnInfo,
@@ -25,6 +26,7 @@ import {
   SessionArtifact,
   SessionDetail,
   SessionListItem,
+  SessionWorkflowState,
   SourceColors
 } from "../shared/types";
 
@@ -40,7 +42,7 @@ declare global {
       removeSessionTag: (sessionId: number, tagId: number) => void;
       toggleSessionLabel: (sessionId: number, labelName: string) => void;
       getDefaultLabelNames: () => string[];
-      exportSessionsByLabel: (label: string) => ExportReport;
+      exportApprovedSessions: (dataset: DatasetExportTarget) => ExportReport;
       setSourceColor: (sourceKind: string, color: string) => SourceColors;
       getAppSettings: () => AppSettingsSnapshot;
       getDbExplorerSnapshot: () => Promise<DbExplorerSnapshot>;
@@ -53,6 +55,8 @@ declare global {
   }
 }
 
+type SessionFilterLane = "all" | "needs_review" | "train_ready" | "holdout_ready" | "favorite";
+
 let dashboardData: DashboardData | null = null;
 let logsPageData: LogsPageData | null = null;
 let activeSessionId: number | null = null;
@@ -61,6 +65,7 @@ let syncStatusUnsubscribe: (() => void) | null = null;
 let isSettingsOpen = false;
 let floatingOverlaysBound = false;
 let activeView: AppView = "sessions";
+let activeSessionLane: SessionFilterLane = "all";
 let logsSearchQuery = "";
 let activeLogsFilter: "all" | "sync" | "export" | "errors" = "all";
 let exportDropdownDismissBound = false;
@@ -203,27 +208,30 @@ function renderSyncStatus(status: BackgroundSyncStatus): void {
 function syncStatusText(status: BackgroundSyncStatus | undefined): string {
   if (!status) return "idle";
 
-  const hasWarnings = (status.failedCaptures ?? 0) > 0 || (status.failedEntries?.length ?? 0) > 0;
-
-  return status.state === "running" ? "syncing..."
+  return status.state === "queued" ? "sync queued"
+    : status.state === "running" ? "syncing..."
+    : status.state === "warning" ? (status.finishedAt ? `sync warnings ${timeAgo(status.finishedAt)}` : "sync warnings")
     : status.state === "failed" ? "sync failed"
-    : hasWarnings ? (status.finishedAt ? `sync warnings ${timeAgo(status.finishedAt)}` : "sync warnings")
-    : status.finishedAt ? `synced ${timeAgo(status.finishedAt)}`
+    : status.state === "completed" ? (status.finishedAt ? `synced ${timeAgo(status.finishedAt)}` : "synced")
     : "idle";
 }
 
-function syncStatusTone(status: BackgroundSyncStatus | undefined): "idle" | "running" | "completed" | "warning" | "failed" {
+function syncStatusTone(status: BackgroundSyncStatus | undefined): "idle" | "queued" | "running" | "completed" | "warning" | "failed" {
   if (!status) {
     return "idle";
   }
 
-  if (status.state === "running" || status.state === "failed") {
+  if (
+    status.state === "idle"
+    || status.state === "queued"
+    || status.state === "running"
+    || status.state === "warning"
+    || status.state === "failed"
+  ) {
     return status.state;
   }
 
-  return (status.failedCaptures ?? 0) > 0 || (status.failedEntries?.length ?? 0) > 0
-    ? "warning"
-    : "completed";
+  return "completed";
 }
 
 function formatDateTime(dateStr: string | undefined): string {
@@ -236,10 +244,33 @@ function formatDateTime(dateStr: string | undefined): string {
   });
 }
 
+function renderDetailContextRow(label: string, value: string, kind: "value" | "copy" = "value"): string {
+  return `
+    <div class="detail-context-row">
+      <div class="detail-context-label">${escapeHtml(label)}</div>
+      <div class="${kind === "copy" ? "detail-context-copy" : "detail-context-value"}">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+function renderDetailContextFullRow(label: string, content: string, kind: "value" | "copy" | "json"): string {
+  const valueHtml =
+    kind === "json" ? `<pre class="detail-context-json">${escapeHtml(content)}</pre>`
+    : `<div class="${kind === "copy" ? "detail-context-copy" : "detail-context-value"}">${escapeHtml(content)}</div>`;
+
+  return `
+    <div class="detail-context-row detail-context-row--full">
+      <div class="detail-context-label">${escapeHtml(label)}</div>
+      ${valueHtml}
+    </div>
+  `;
+}
+
 function logStatusBadgeClass(entry: LogEntry): string {
   if (entry.status === "failed") return "badge-status-failed";
   if (entry.status === "running") return "badge-status-running";
   if (entry.status === "queued") return "badge-status-queued";
+  if (entry.status === "warning") return "badge-status-warning";
   if (entry.level === "error") return "badge-status-failed";
   return "badge-status-completed";
 }
@@ -266,7 +297,7 @@ function renderLogMetrics(entry: LogEntry): string {
 
   return `
     <div class="log-metrics">
-      <span>${entry.sourceLabel ?? "export"}</span>
+      <span>${entry.sourceLabel ? `${entry.sourceLabel} dataset` : "dataset export"}</span>
       <span>${entry.metrics.recordCount ?? 0} records</span>
     </div>
   `;
@@ -312,12 +343,12 @@ function renderLogEntry(entry: LogEntry): string {
     : "";
   const detailRows = [
     details?.reason ? `<div class="log-detail-row"><span class="log-detail-key">Reason</span><span class="log-detail-value">${escapeHtml(details.reason)}</span></div>` : "",
-    details?.label ? `<div class="log-detail-row"><span class="log-detail-key">Label</span><span class="log-detail-value">${escapeHtml(details.label)}</span></div>` : "",
+    details?.dataset ? `<div class="log-detail-row"><span class="log-detail-key">Dataset</span><span class="log-detail-value">${escapeHtml(details.dataset)}</span></div>` : "",
     details?.outputPath ? `<div class="log-detail-row"><span class="log-detail-key">Output</span><span class="log-detail-value">${escapeHtml(details.outputPath)}</span></div>` : ""
   ].filter(Boolean).join("");
 
   return `
-    <details class="log-card ${entry.level === "error" ? "is-error" : ""}">
+    <details class="log-card ${entry.level === "error" ? "is-error" : entry.status === "warning" ? "is-warning" : ""}">
       <summary>
         <div class="log-card-topline">
           <span class="log-timestamp">${escapeHtml(formatDateTime(entry.updatedAt ?? entry.createdAt))}</span>
@@ -360,7 +391,7 @@ function filteredLogEntries(data: LogsPageData): LogEntry[] {
       entry.summary,
       entry.sourceLabel,
       entry.details?.reason,
-      entry.details?.label,
+      entry.details?.dataset,
       entry.details?.outputPath,
       entry.rawJson,
       ...(entry.details?.failedEntries ?? []).flatMap((failure) => [failure.sourceKind, failure.sourcePath, failure.errorText])
@@ -1494,6 +1525,80 @@ function renderSource(source: DiscoveredSource): string {
 
 /* Session list item */
 
+function workflowBadgeClass(workflowState: SessionWorkflowState): string {
+  if (workflowState === "needs_review") return "badge-workflow-review";
+  if (workflowState === "train_ready") return "badge-workflow-train";
+  if (workflowState === "holdout_ready") return "badge-workflow-holdout";
+  if (workflowState === "favorite") return "badge-workflow-favorite";
+  return "";
+}
+
+function workflowBadgeLabel(workflowState: SessionWorkflowState): string | undefined {
+  if (workflowState === "needs_review") return "review";
+  if (workflowState === "train_ready") return "train";
+  if (workflowState === "holdout_ready") return "holdout";
+  if (workflowState === "favorite") return "favorite";
+  return undefined;
+}
+
+function renderWorkflowBadge(
+  item: Pick<SessionListItem, "workflowState" | "labels"> | Pick<SearchResult, "workflowState" | "labels">
+): string {
+  const label = workflowBadgeLabel(item.workflowState);
+  if (!label) {
+    return "";
+  }
+
+  const tooltip = item.labels.length ? `Labels: ${item.labels.join(", ")}` : label;
+  return `<span class="badge ${workflowBadgeClass(item.workflowState)}" ${titleAttr(tooltip)}>${escapeHtml(label)}</span>`;
+}
+
+function matchesSessionLane(
+  item: Pick<SessionListItem, "workflowState" | "labels"> | Pick<SearchResult, "workflowState" | "labels">,
+  lane = activeSessionLane
+): boolean {
+  if (lane === "all") {
+    return true;
+  }
+
+  if (lane === "favorite") {
+    return item.labels.includes("favorite");
+  }
+
+  return item.workflowState === lane;
+}
+
+function filterSessionItems<T extends SessionListItem | SearchResult>(items: T[]): T[] {
+  return items.filter((item) => matchesSessionLane(item));
+}
+
+function visibleSessionItems(report: DashboardData, query: string): Array<SessionListItem | SearchResult> {
+  return query
+    ? filterSessionItems(window.distillApi.searchSessions(query))
+    : filterSessionItems(report.sessions);
+}
+
+function renderSessionLaneFilters(report: DashboardData): string {
+  const lanes: Array<{ lane: SessionFilterLane; label: string }> = [
+    { lane: "all", label: "All" },
+    { lane: "needs_review", label: "Needs Review" },
+    { lane: "train_ready", label: "Train Ready" },
+    { lane: "holdout_ready", label: "Holdout Ready" },
+    { lane: "favorite", label: "Favorites" }
+  ];
+
+  return `
+    <div class="session-filter-bar">
+      ${lanes.map(({ lane, label }) => {
+        const count = lane === "all"
+          ? report.sessions.length
+          : report.sessions.filter((session) => matchesSessionLane(session, lane)).length;
+        return `<button class="chip ${activeSessionLane === lane ? "active" : ""}" type="button" data-session-lane="${lane}">${escapeHtml(label)} <span class="session-filter-count">${count}</span></button>`;
+      }).join("")}
+    </div>
+  `;
+}
+
 function renderSessionItem(session: SessionListItem): string {
   const metaTooltip = `${session.sourceKind} session, ${session.messageCount} messages${session.model ? `, model ${session.model}` : ""}${session.gitBranch ? `, branch ${session.gitBranch}` : ""}`;
   return `
@@ -1501,6 +1606,7 @@ function renderSessionItem(session: SessionListItem): string {
       <div class="session-item-title">${escapeHtml(session.title)}</div>
       <div class="session-item-meta">
         <span class="badge ${sourceBadgeClass(session.sourceKind)}">${sourceLabel(session.sourceKind)}</span>
+        ${renderWorkflowBadge(session)}
         ${session.model ? `<span class="badge badge-model">${escapeHtml(session.model)}</span>` : ""}
         <span>${session.messageCount} msgs</span>
         <span>${timeAgo(session.updatedAt)}</span>
@@ -1517,6 +1623,7 @@ function renderSearchItem(result: SearchResult): string {
       <div class="session-item-title">${escapeHtml(result.title)}</div>
       <div class="session-item-meta">
         <span class="badge ${sourceBadgeClass(result.sourceKind)}">${sourceLabel(result.sourceKind)}</span>
+        ${renderWorkflowBadge(result)}
         <span>${timeAgo(result.updatedAt)}</span>
       </div>
       <div class="session-item-preview">${escapeHtml(result.snippet)}</div>
@@ -1676,16 +1783,41 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
     `
     : "";
 
+  const projectionMetadataRows = [
+    renderDetailContextRow("External session", detail.externalSessionId),
+    renderDetailContextRow("Raw captures", detail.rawCaptureCount.toString()),
+    detail.startedAt ? renderDetailContextRow("Started", formatDateTime(detail.startedAt)) : "",
+    detail.sourceUrl ? renderDetailContextRow("Source URL", detail.sourceUrl) : ""
+  ].filter(Boolean).join("");
+
+  const projectionMetadataExtras = [
+    detail.summary ? renderDetailContextFullRow("Summary", detail.summary, "copy") : "",
+    Object.keys(detail.metadata).length > 0
+      ? renderDetailContextFullRow("Provenance", JSON.stringify(detail.metadata, null, 2), "json")
+      : ""
+  ].filter(Boolean).join("");
+
+  const projectionMetadata = projectionMetadataRows || projectionMetadataExtras
+    ? `
+      <section class="detail-context">
+        <div class="section-title">Projection metadata</div>
+        <div class="detail-context-grid">
+          ${projectionMetadataRows}
+          ${projectionMetadataExtras}
+        </div>
+      </section>
+    `
+    : "";
+
   root.innerHTML = `
     <div class="fade-in">
     <div class="detail-toolbar">
       <span class="detail-title">${escapeHtml(detail.title)}</span>
       <div class="dropdown" data-export-dropdown>
-        <button class="btn btn-secondary" data-export-toggle ${tooltipAttrs("Export labeled sessions (train, holdout, or favorite) as JSONL files.")}>\u2913 Export</button>
+        <button class="btn btn-secondary" data-export-toggle ${tooltipAttrs("Export the approved train or holdout dataset. Sessions marked sensitive or exclude stay in review and are skipped.")}>\u2913 Export</button>
         <div class="dropdown-menu" data-export-menu>
-          <button class="dropdown-item" data-export-label="train">Export training set</button>
-          <button class="dropdown-item" data-export-label="holdout">Export holdout set</button>
-          <button class="dropdown-item" data-export-label="favorite">Export favorites</button>
+          <button class="dropdown-item" data-export-dataset="train">Export train dataset</button>
+          <button class="dropdown-item" data-export-dataset="holdout">Export holdout dataset</button>
         </div>
       </div>
       <div class="detail-meta-secondary">
@@ -1702,7 +1834,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
       <div class="curation-group">
         <span class="curation-group-label">Labels</span>
         ${labelChips}
-        ${renderHelpTip("Labels (train, holdout, favorite) control which export set a session belongs to. Tags are free-form notes you can add for your own organization.", "Labels & Tags")}
+        ${renderHelpTip("Train, holdout, and exclude are mutually exclusive dataset labels. Sensitive and exclude send a session to review and block standard dataset export. Favorite is bookmark-only. Tags are free-form notes.", "Labels & Tags")}
       </div>
       <div class="curation-group">
         <span class="curation-group-label">Tags</span>
@@ -1712,6 +1844,7 @@ function renderSessionDetail(detail: SessionDetail | undefined): void {
         </form>
       </div>
     </div>
+    ${projectionMetadata}
     ${artifacts}
     <div class="message-list">${messages}</div>
     </div>
@@ -1734,7 +1867,7 @@ function bindDetailCuration(sessionId: number): void {
       const label = btn.dataset.toggleLabel;
       if (!label) return;
       window.distillApi.toggleSessionLabel(sessionId, label);
-      refreshActiveSession();
+      refreshDashboard();
     });
   }
 
@@ -1743,7 +1876,7 @@ function bindDetailCuration(sessionId: number): void {
       const tagId = Number(btn.dataset.removeTagId);
       if (!Number.isFinite(tagId)) return;
       window.distillApi.removeSessionTag(sessionId, tagId);
-      refreshActiveSession();
+      refreshDashboard();
     });
   }
 
@@ -1757,7 +1890,7 @@ function bindDetailCuration(sessionId: number): void {
       if (!name) return;
       window.distillApi.addSessionTag(sessionId, name);
       input.value = "";
-      refreshActiveSession();
+      refreshDashboard();
     });
   }
 }
@@ -1774,7 +1907,31 @@ function bindSessionClicks(): void {
   }
 }
 
-function renderSessionList(items: Array<SessionListItem | SearchResult>): void {
+function bindSessionLaneFilters(): void {
+  for (const btn of document.querySelectorAll<HTMLElement>("[data-session-lane]")) {
+    btn.onclick = () => {
+      const lane = btn.dataset.sessionLane;
+      if (
+        lane !== "all"
+        && lane !== "needs_review"
+        && lane !== "train_ready"
+        && lane !== "holdout_ready"
+        && lane !== "favorite"
+      ) {
+        return;
+      }
+
+      if (activeSessionLane === lane) {
+        return;
+      }
+
+      activeSessionLane = lane;
+      renderCurrentView();
+    };
+  }
+}
+
+function renderSessionList(report: DashboardData, items: Array<SessionListItem | SearchResult>): void {
   const container = document.querySelector<HTMLElement>("[data-sessions]");
   if (!container) return;
 
@@ -1782,9 +1939,18 @@ function renderSessionList(items: Array<SessionListItem | SearchResult>): void {
   const listHtml = query
     ? (items as SearchResult[]).map(renderSearchItem).join("")
     : (items as SessionListItem[]).map(renderSessionItem).join("");
-  container.innerHTML = `<div class="fade-in">${listHtml}</div>`;
+  const emptyCopy = query
+    ? "No sessions match the current search and workflow lane."
+    : "No sessions are in this workflow lane yet.";
+  container.innerHTML = `
+    <div class="fade-in">
+      ${renderSessionLaneFilters(report)}
+      ${listHtml ? listHtml : `<div class="sidebar-empty">${escapeHtml(emptyCopy)}</div>`}
+    </div>
+  `;
 
   bindSessionClicks();
+  bindSessionLaneFilters();
 }
 
 function bindSearch(report: DashboardData): void {
@@ -1793,8 +1959,8 @@ function bindSearch(report: DashboardData): void {
 
   input.oninput = () => {
     const q = input.value.trim();
-    const items = q ? window.distillApi.searchSessions(q) : report.sessions;
-    renderSessionList(items);
+    const items = visibleSessionItems(report, q);
+    renderSessionList(report, items);
 
     const first = items[0];
     const firstId = first ? ("id" in first ? first.id : first.sessionId) : undefined;
@@ -1819,13 +1985,13 @@ function bindExportDropdown(): void {
     menu.classList.toggle("visible");
   };
 
-  for (const btn of menu.querySelectorAll<HTMLElement>("[data-export-label]")) {
+  for (const btn of menu.querySelectorAll<HTMLElement>("[data-export-dataset]")) {
     btn.onclick = () => {
-      const label = btn.dataset.exportLabel;
-      if (!label) return;
-      const report = window.distillApi.exportSessionsByLabel(label);
+      const dataset = btn.dataset.exportDataset as DatasetExportTarget | undefined;
+      if (dataset !== "train" && dataset !== "holdout") return;
+      const report = window.distillApi.exportApprovedSessions(dataset);
       refreshLogsData(false);
-      showExportToast(`Exported ${report.recordCount} ${report.label} \u2192 ${report.outputPath}`);
+      showExportToast(`Exported ${report.recordCount} ${report.dataset} \u2192 ${report.outputPath}`);
       menu.classList.remove("visible");
     };
   }
@@ -2138,14 +2304,14 @@ function bindBackgroundSync(): void {
     renderSyncStatus(status);
     refreshLogsData(false);
 
-    if (status.state === "completed") {
+    if (status.state === "completed" || status.state === "warning") {
       dashboardData = window.distillApi.getDashboardData();
       if (activeView === "db") {
         refreshDbAfterSync();
       }
     }
 
-    if (activeView === "logs" || status.state === "completed") {
+    if (activeView === "logs" || status.state === "completed" || status.state === "warning") {
       renderCurrentView();
     }
   });
@@ -2189,18 +2355,24 @@ function renderSessionsView(report: DashboardData): void {
 
   sources.innerHTML = report.doctor.sources.map(renderSource).join("");
   const query = document.querySelector<HTMLInputElement>("[data-search-input]")?.value.trim() ?? "";
-  const items = query ? window.distillApi.searchSessions(query) : report.sessions;
-  renderSessionList(items);
+  const items = visibleSessionItems(report, query);
+  renderSessionList(report, items);
   bindSearch(report);
   bindSyncButton();
   bindSourcesToggle();
   bindFloatingOverlays();
   bindSettingsPanel();
 
-  if (countEl) countEl.textContent = query ? `${items.length} results` : `${totalSessions} sessions`;
+  if (countEl) countEl.textContent = query ? `${items.length} results` : `${items.length} sessions`;
+
+  const visibleSessionIds = new Set(
+    items.map((item) => ("id" in item ? item.id : item.sessionId))
+  );
 
   const preferredId =
-    activeSessionId !== null && window.distillApi.getSessionDetail(activeSessionId)
+    activeSessionId !== null
+      && visibleSessionIds.has(activeSessionId)
+      && window.distillApi.getSessionDetail(activeSessionId)
       ? activeSessionId
       : items[0] ? ("id" in items[0] ? items[0].id : items[0].sessionId) : undefined;
 

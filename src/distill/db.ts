@@ -33,11 +33,38 @@ type TableInfoRow = {
   notnull: number;
 };
 
+type ProjectionMessageLinkIndex = {
+  messageIdsBySourceLine: Map<number, number>;
+  messageIdsByExternalMessageId: Map<string, number>;
+};
+
 export type DistillDatabase = {
   db: DatabaseSync;
   databasePath: string;
   close: () => void;
 };
+
+export type SessionProjectionInput = {
+  captureId: number;
+  sourceId: number;
+  session: NormalizedSession;
+  messages: NormalizedMessage[];
+  artifacts: NormalizedArtifact[];
+  rawRecords: ParsedCaptureRecord[];
+  projectionAudit: {
+    sourceKind: string;
+    sourcePath: string;
+    externalSessionId?: string | null;
+  };
+};
+
+export type SessionProjectionResult = {
+  sessionId: number;
+  messageCount: number;
+  artifactCount: number;
+};
+
+type NonPromise<T> = T extends PromiseLike<unknown> ? never : T;
 
 function loadSchema(): string {
   const schemaPath = path.resolve(process.cwd(), "schema.sql");
@@ -50,16 +77,21 @@ function migrateLegacySchema(db: DatabaseSync): void {
     .all() as TableInfoRow[];
   const objectIdColumn = activityEventColumns.find((column) => column.name === "object_id");
   const needsActivityEventMigration = Boolean(objectIdColumn && objectIdColumn.notnull !== 0);
+  const needsArtifactMessageIdMigration = !tableHasColumn(db, "artifacts", "message_id");
   const hasLegacyFailedCaptureStatus = Boolean(
     db.prepare("SELECT 1 FROM captures WHERE status = 'failed' LIMIT 1").get() as { 1: number } | undefined
   );
 
-  if (!needsActivityEventMigration && !hasLegacyFailedCaptureStatus) {
+  if (!needsActivityEventMigration && !needsArtifactMessageIdMigration && !hasLegacyFailedCaptureStatus) {
     return;
   }
 
   db.exec("BEGIN");
   try {
+    if (needsArtifactMessageIdMigration) {
+      db.exec("ALTER TABLE artifacts ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE");
+    }
+
     if (hasLegacyFailedCaptureStatus) {
       db.exec("UPDATE captures SET status = 'failed_parse' WHERE status = 'failed'");
     }
@@ -122,6 +154,41 @@ function migrateLegacySchema(db: DatabaseSync): void {
   }
 }
 
+function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+  const columns = db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as TableInfoRow[];
+
+  return columns.some((column) => column.name === columnName);
+}
+
+function backfillArtifactMessageLinks(db: DatabaseSync): void {
+  if (!tableHasColumn(db, "artifacts", "message_id")) {
+    return;
+  }
+
+  db.prepare(`
+    UPDATE artifacts
+    SET message_id = (
+      SELECT m.id
+      FROM messages m
+      WHERE m.session_id = artifacts.session_id
+      AND m.capture_record_id = artifacts.capture_record_id
+      ORDER BY m.ordinal DESC
+      LIMIT 1
+    )
+    WHERE message_id IS NULL
+    AND session_id IS NOT NULL
+    AND capture_record_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM messages m
+      WHERE m.session_id = artifacts.session_id
+      AND m.capture_record_id = artifacts.capture_record_id
+    )
+  `).run();
+}
+
 export function openDistillDatabase(): DistillDatabase {
   const distillHome = getDistillHome();
   ensureDirectory(distillHome);
@@ -133,6 +200,7 @@ export function openDistillDatabase(): DistillDatabase {
   const db = new DatabaseSync(databasePath);
   db.exec(loadSchema());
   migrateLegacySchema(db);
+  backfillArtifactMessageLinks(db);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
 
@@ -141,6 +209,47 @@ export function openDistillDatabase(): DistillDatabase {
     databasePath,
     close: () => db.close()
   };
+}
+
+export function runInTransaction<T>(db: DatabaseSync, fn: () => NonPromise<T>): NonPromise<T> {
+  type PromiseLikeResult = {
+    then: (...args: unknown[]) => unknown;
+  };
+
+  if (fn.constructor?.name === "AsyncFunction") {
+    throw new Error("runInTransaction does not support async functions");
+  }
+
+  let transactionOpen = false;
+
+  try {
+    db.exec("BEGIN");
+    transactionOpen = true;
+
+    const result = fn();
+    if (
+      (typeof result === "object" || typeof result === "function")
+      && result !== null
+      && "then" in result
+      && typeof (result as PromiseLikeResult).then === "function"
+    ) {
+      throw new Error("runInTransaction does not support async functions");
+    }
+
+    db.exec("COMMIT");
+    transactionOpen = false;
+    return result;
+  } catch (error) {
+    if (transactionOpen) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original transaction error below.
+      }
+    }
+
+    throw error;
+  }
 }
 
 export function upsertSource(db: DatabaseSync, source: DiscoveredSource): number {
@@ -333,7 +442,7 @@ export function replaceSessionMessages(
   sessionId: number,
   messages: NormalizedMessage[],
   captureRecordIdsByLine: Map<number, number>
-): void {
+): ProjectionMessageLinkIndex {
   db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId);
 
   const insert = db.prepare(`
@@ -350,10 +459,15 @@ export function replaceSessionMessages(
       message_kind,
       metadata_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    RETURNING id
   `);
+  const messageLinks: ProjectionMessageLinkIndex = {
+    messageIdsBySourceLine: new Map(),
+    messageIdsByExternalMessageId: new Map()
+  };
 
   messages.forEach((message, index) => {
-    insert.run(
+    const row = insert.get(
       sessionId,
       captureRecordIdsByLine.get(message.sourceLineNo) ?? null,
       message.externalMessageId ?? null,
@@ -365,37 +479,94 @@ export function replaceSessionMessages(
       message.createdAt ?? null,
       message.messageKind,
       JSON.stringify(message.metadata)
-    );
+    ) as { id: number };
+
+    messageLinks.messageIdsBySourceLine.set(message.sourceLineNo, row.id);
+    if (message.externalMessageId) {
+      messageLinks.messageIdsByExternalMessageId.set(message.externalMessageId, row.id);
+    }
   });
+
+  return messageLinks;
+}
+
+function resolveArtifactMessageId(
+  artifact: NormalizedArtifact,
+  messageLinks: ProjectionMessageLinkIndex
+): number | null {
+  const linkedByExternalMessageId =
+    artifact.externalMessageId ? messageLinks.messageIdsByExternalMessageId.get(artifact.externalMessageId) : undefined;
+  if (linkedByExternalMessageId) {
+    return linkedByExternalMessageId;
+  }
+
+  return messageLinks.messageIdsBySourceLine.get(artifact.sourceLineNo) ?? null;
 }
 
 export function replaceSessionArtifacts(
   db: DatabaseSync,
   sessionId: number,
   artifacts: NormalizedArtifact[],
-  captureRecordIdsByLine: Map<number, number>
+  captureRecordIdsByLine: Map<number, number>,
+  messageLinks: ProjectionMessageLinkIndex
 ): void {
   db.prepare("DELETE FROM artifacts WHERE session_id = ?").run(sessionId);
 
   const insert = db.prepare(`
     INSERT INTO artifacts (
       session_id,
+      message_id,
       capture_record_id,
       kind,
       mime_type,
       metadata_json
-    ) VALUES (?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   for (const artifact of artifacts) {
     insert.run(
       sessionId,
+      resolveArtifactMessageId(artifact, messageLinks),
       captureRecordIdsByLine.get(artifact.sourceLineNo) ?? null,
       artifact.kind,
       artifact.mimeType ?? null,
       JSON.stringify(artifact.payload)
     );
   }
+}
+
+export function replaceSessionProjection(
+  db: DatabaseSync,
+  input: SessionProjectionInput
+): SessionProjectionResult {
+  return runInTransaction(db, () => {
+    const captureRecordIdsByLine = insertCaptureRecords(db, input.captureId, input.rawRecords);
+    const sessionId = upsertSession(db, input.sourceId, input.session, input.messages.length);
+    const messageLinks = replaceSessionMessages(db, sessionId, input.messages, captureRecordIdsByLine);
+
+    replaceSessionArtifacts(db, sessionId, input.artifacts, captureRecordIdsByLine, messageLinks);
+    updateCaptureStatus(db, input.captureId, "normalized");
+    insertActivityEvent(db, {
+      eventType: "projection_replaced",
+      objectType: "session",
+      objectId: sessionId,
+      sessionId,
+      payload: {
+        captureId: input.captureId,
+        sourceKind: input.projectionAudit.sourceKind,
+        sourcePath: input.projectionAudit.sourcePath,
+        externalSessionId: input.projectionAudit.externalSessionId ?? null,
+        messageCount: input.messages.length,
+        artifactCount: input.artifacts.length
+      }
+    });
+
+    return {
+      sessionId,
+      messageCount: input.messages.length,
+      artifactCount: input.artifacts.length
+    };
+  });
 }
 
 function parseCapturePayload(rawPayloadJson: string | null): CapturePayload {

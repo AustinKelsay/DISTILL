@@ -145,6 +145,11 @@
         border-color: rgba(212, 148, 74, 0.35);
       }
 
+      .topbar-sync[data-state="queued"] {
+        color: var(--warn);
+        border-color: rgba(212, 148, 74, 0.35);
+      }
+
       .topbar-sync[data-state="completed"] {
         color: var(--accent);
         border-color: rgba(61, 191, 154, 0.35);
@@ -611,6 +616,27 @@
         border-bottom: 1px solid var(--line);
       }
 
+      .session-filter-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(58, 58, 62, 0.5);
+        background: rgba(30, 30, 34, 0.55);
+      }
+
+      .session-filter-count {
+        color: var(--dim);
+        margin-left: 6px;
+      }
+
+      .sidebar-empty {
+        padding: 18px 16px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
       .session-item {
         padding: 14px 16px;
         border-bottom: 1px solid rgba(58, 58, 62, 0.5);
@@ -681,6 +707,10 @@
       .badge-source-opencode { background: var(--source-opencode-bg, rgba(140, 100, 210, 0.14)); color: var(--source-opencode, #a88cd4); }
       .badge-source-codex { background: var(--source-codex-bg, rgba(61, 191, 154, 0.14)); color: var(--source-codex, #3dbf9a); }
       .badge-model { background: rgba(58, 58, 62, 0.5); color: var(--muted); }
+      .badge-workflow-review { background: rgba(212, 148, 74, 0.14); color: var(--warn); }
+      .badge-workflow-train { background: rgba(61, 191, 154, 0.14); color: var(--accent); }
+      .badge-workflow-holdout { background: rgba(120, 176, 255, 0.14); color: #8fbaff; }
+      .badge-workflow-favorite { background: rgba(230, 187, 92, 0.14); color: #e6bb5c; }
 
       /* ── Detail pane ── */
       .detail {
@@ -800,6 +830,11 @@
         box-shadow: inset 0 1px 0 rgba(212, 106, 74, 0.08);
       }
 
+      .log-card.is-warning {
+        border-color: rgba(212, 148, 74, 0.32);
+        box-shadow: inset 0 1px 0 rgba(212, 148, 74, 0.08);
+      }
+
       .log-card summary {
         list-style: none;
         cursor: pointer;
@@ -850,6 +885,11 @@
       .badge-status-running,
       .badge-status-queued {
         background: rgba(212, 148, 74, 0.16);
+        color: var(--warn);
+      }
+
+      .badge-status-warning {
+        background: rgba(212, 148, 74, 0.12);
         color: var(--warn);
       }
 
@@ -1605,6 +1645,65 @@
 
       .chip:hover { border-color: rgba(61, 191, 154, 0.3); }
       .chip.active { background: var(--ok-bg); color: var(--accent); border-color: rgba(61, 191, 154, 0.26); }
+
+      .detail-context {
+        padding: 16px 24px 8px;
+        border-bottom: 1px solid rgba(58, 58, 62, 0.5);
+        background: rgba(30, 30, 34, 0.36);
+      }
+
+      .detail-context-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+      }
+
+      .detail-context-row {
+        min-width: 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(58, 58, 62, 0.65);
+        border-radius: 8px;
+        background: rgba(34, 34, 38, 0.65);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .detail-context-row--full {
+        grid-column: 1 / -1;
+      }
+
+      .detail-context-label {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 600;
+      }
+
+      .detail-context-value,
+      .detail-context-json {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ink);
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .detail-context-copy {
+        font-size: 13px;
+        color: var(--ink);
+        line-height: 1.65;
+        white-space: pre-wrap;
+      }
+
+      .detail-context-json {
+        margin: 0;
+        overflow: auto;
+        max-height: 240px;
+      }
 
       .tag-input {
         border: 1px solid var(--card-border);

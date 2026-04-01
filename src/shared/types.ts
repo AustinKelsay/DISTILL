@@ -157,15 +157,59 @@ export type ImportFailureEntry = {
   errorText: string;
 };
 
+export type DatasetExportTarget = "train" | "holdout";
+
+export type SessionWorkflowState =
+  | "needs_review"
+  | "train_ready"
+  | "holdout_ready"
+  | "favorite"
+  | "neutral";
+
 export type ExportReport = {
   exportedAt: string;
-  label: string;
+  dataset: DatasetExportTarget;
   outputPath: string;
   recordCount: number;
 };
 
+// Export records intentionally keep snake_case field names to match the
+// external JSON schema consumed by Python/ML tooling. Renaming any of these
+// fields requires coordinated updates across the export/ingest pipeline and
+// downstream consumers.
+export type ExportMessageRecord = {
+  ordinal: number;
+  role: string;
+  text: string;
+  created_at: string | null;
+  message_kind: "text" | "meta";
+  metadata: Record<string, unknown>;
+};
+
+export type ExportSessionRecord = {
+  exported_at: string;
+  source: SourceKind;
+  external_session_id: string;
+  title: string | null;
+  project_path: string | null;
+  updated_at: string | null;
+  started_at: string | null;
+  source_url: string | null;
+  model: string | null;
+  git_branch: string | null;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  labels: string[];
+  tags: string[];
+  messages: ExportMessageRecord[];
+  turn_pairs: Array<{
+    user: string;
+    assistant: string;
+  }>;
+};
+
 export type BackgroundSyncStatus = {
-  state: "idle" | "running" | "completed" | "failed";
+  state: "idle" | "queued" | "running" | "warning" | "completed" | "failed";
   jobId?: number;
   reason?: string;
   startedAt?: string;
@@ -184,7 +228,7 @@ export type AppView = "sessions" | "db" | "logs";
 
 export type LogEntryKind = "sync" | "export";
 
-export type LogEntryStatus = "queued" | "running" | "completed" | "failed";
+export type LogEntryStatus = "queued" | "running" | "warning" | "completed" | "failed";
 
 export type LogEntryLevel = "info" | "error";
 
@@ -208,7 +252,7 @@ export type LogEntry = {
   details?: {
     reason?: string;
     outputPath?: string;
-    label?: string;
+    dataset?: DatasetExportTarget;
     sourceSummaries?: ImportSourceSummary[];
     failedEntries?: ImportFailureEntry[];
   };
@@ -388,6 +432,8 @@ export type SessionListItem = {
   messageCount: number;
   model?: string;
   gitBranch?: string;
+  labels: string[];
+  workflowState: SessionWorkflowState;
   preview?: string;
 };
 
@@ -402,6 +448,8 @@ export type SearchResult = {
   title: string;
   projectPath?: string;
   updatedAt?: string;
+  labels: string[];
+  workflowState: SessionWorkflowState;
   snippet: string;
 };
 
@@ -444,13 +492,19 @@ export type SessionArtifact = {
 export type SessionDetail = {
   id: number;
   sourceKind: SourceKind;
+  externalSessionId: string;
   title: string;
   projectPath?: string;
+  startedAt?: string;
   updatedAt?: string;
+  sourceUrl?: string;
   messageCount: number;
+  rawCaptureCount: number;
   model?: string;
   gitBranch?: string;
+  summary?: string;
   preview?: string;
+  metadata: Record<string, unknown>;
   artifactCount: number;
   tags: SessionTag[];
   labels: SessionLabel[];

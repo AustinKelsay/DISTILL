@@ -154,11 +154,18 @@ export function parseCodexCapture(capture: DiscoveredCapture, snapshot: CaptureS
   });
 
   const sessionMeta = externalSessionId ? sessionIndex.get(externalSessionId) : undefined;
+  const resolvedExternalSessionId = externalSessionId ?? path.basename(capture.sourcePath);
+  const externalSessionIdProvenance = externalSessionId
+    ? { kind: "source" as const }
+    : {
+        kind: "synthetic" as const,
+        strategy: "capture_path_basename"
+      };
 
   return {
     session: {
       sourceKind: "codex",
-      externalSessionId: externalSessionId ?? path.basename(capture.sourcePath),
+      externalSessionId: resolvedExternalSessionId,
       title: pickCodexTitle(externalSessionId, sessionIndex, messages),
       projectPath,
       model,
@@ -167,7 +174,8 @@ export function parseCodexCapture(capture: DiscoveredCapture, snapshot: CaptureS
       startedAt,
       updatedAt: sessionMeta?.updatedAt ?? updatedAt,
       metadata: {
-        capturePath: capture.sourcePath
+        capturePath: capture.sourcePath,
+        externalSessionIdProvenance
       }
     },
     messages,

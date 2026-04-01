@@ -6,11 +6,17 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { sourceConnectors } from "../connectors";
 import { SourceConnector } from "../connectors/types";
-import { getCaptureContentRef, openDistillDatabase, readCaptureText } from "../distill/db";
+import { getCaptureContentRef, openDistillDatabase, readCaptureText, runInTransaction } from "../distill/db";
 import { ensureDirectory } from "../distill/fs";
 import { getInlineCaptureMaxBytes, readCaptureContentText, resolveCaptureBlobPath } from "../distill/raw_capture";
 import { runImport } from "../distill/import";
 import { DiscoveredCapture } from "../shared/types";
+import {
+  getInstalledFixtureSourcePath,
+  installIngestFixtures,
+  readFixtureCaptureText,
+  writeFakeOpenCodeExecutable
+} from "./support/ingest_fixtures";
 
 type SavedEnv = Record<
   | "DISTILL_HOME"
@@ -72,136 +78,25 @@ function withTempEnv<T>(fn: (root: string) => T): T {
 }
 
 function writeFixtureFiles(root: string): void {
-  const codexPath = path.join(root, ".codex", "archived_sessions");
-  const claudePath = path.join(root, ".claude", "projects", "demo-project");
-  const opencodeConfigDir = path.join(root, ".config", "opencode");
-
-  ensureDirectory(codexPath);
-  ensureDirectory(claudePath);
-  ensureDirectory(opencodeConfigDir);
-  fs.writeFileSync(path.join(opencodeConfigDir, "opencode.json"), "{}\n");
-
-  fs.writeFileSync(
-    path.join(codexPath, "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"),
-    [
-      JSON.stringify({
-        timestamp: "2026-03-25T10:00:00.000Z",
-        type: "session_meta",
-        payload: { id: "abc12345-1111-2222-3333-abcdefabcdef", cwd: "/tmp/demo" }
-      }),
-      JSON.stringify({
-        timestamp: "2026-03-25T10:01:00.000Z",
-        type: "response_item",
-        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello codex" }] }
-      })
-    ].join("\n")
-  );
-
-  fs.writeFileSync(
-    path.join(claudePath, "123e4567-e89b-12d3-a456-426614174000.jsonl"),
-    [
-      JSON.stringify({
-        type: "user",
-        uuid: "u1",
-        sessionId: "123e4567-e89b-12d3-a456-426614174000",
-        timestamp: "2026-03-25T11:00:00.000Z",
-        message: { role: "user", content: [{ type: "text", text: "hello claude" }] }
-      })
-    ].join("\n")
-  );
-
+  installIngestFixtures(root, ["codex-live-session", "claude-mixed-blocks"]);
   writeFakeOpenCodeExecutable(root, [], {});
 }
 
-function writeFakeOpenCodeExecutable(
-  root: string,
-  sessions: Array<Record<string, unknown>> | string,
-  exportsBySession: Record<string, string>
-): void {
-  const binDir = path.join(root, ".bin");
-  const opencodeDbPath = path.join(root, ".local", "share", "opencode", "opencode.db");
-  const dbQueryPath = path.join(root, "opencode-sessions.json");
-  const exportDir = path.join(root, "opencode-exports");
+test("writeFakeOpenCodeExecutable replaces stale export fixtures between calls", () => {
+  withTempEnv((root) => {
+    writeFakeOpenCodeExecutable(root, [], {
+      stale_session: "{\"stale\":true}\n"
+    });
+    writeFakeOpenCodeExecutable(root, [], {
+      fresh_session: "{\"fresh\":true}\n"
+    });
 
-  ensureDirectory(binDir);
-  ensureDirectory(path.dirname(opencodeDbPath));
-  ensureDirectory(exportDir);
-
-  fs.writeFileSync(opencodeDbPath, "");
-  fs.writeFileSync(dbQueryPath, typeof sessions === "string" ? sessions : JSON.stringify(sessions, null, 2));
-
-  for (const [sessionId, output] of Object.entries(exportsBySession)) {
-    fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
-  }
-
-  const safeExecPath = process.execPath
-    .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
-    .replace(/&/g, "^&")
-    .replace(/\|/g, "^|")
-    .replace(/</g, "^<")
-    .replace(/>/g, "^>")
-    .replace(/"/g, "\"\"");
-
-  const scriptPath = path.join(binDir, "opencode");
-  const cmdPath = path.join(binDir, "opencode.cmd");
-  fs.writeFileSync(
-    scriptPath,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-
-const args = process.argv.slice(2);
-
-if (args[0] === "db" && args[1] === "path") {
-  process.stdout.write(\`\${process.env.TEST_OPENCODE_DB_PATH ?? ""}\\n\`);
-  process.exit(0);
-}
-
-if (args[0] === "db") {
-  process.stdout.write(fs.readFileSync(process.env.TEST_OPENCODE_DB_QUERY_JSON, "utf8"));
-  process.exit(0);
-}
-
-if (args[0] === "export") {
-  const session = args[1];
-  const file = path.join(process.env.TEST_OPENCODE_EXPORT_DIR, \`\${session}.json\`);
-  if (!fs.existsSync(file)) {
-    process.stderr.write(\`missing export for \${session}\\n\`);
-    process.exit(1);
-  }
-
-  const output = fs.readFileSync(file);
-  const shouldTruncate =
-    process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE === "1"
-    && fs.fstatSync(1).isFIFO()
-    && output.length > 65536;
-
-  process.stderr.write(\`Exporting session: \${session}\\n\`);
-  process.stdout.write(shouldTruncate ? output.subarray(0, 65536) : output);
-  process.exit(0);
-}
-
-process.stderr.write("unsupported fake opencode command\\n");
-process.exit(1);
-`
-  );
-  fs.writeFileSync(
-    cmdPath,
-    `@echo off
-"${safeExecPath}" "%~dp0opencode" %*
-`
-  );
-  if (process.platform !== "win32") {
-    fs.chmodSync(scriptPath, 0o755);
-  }
-
-  process.env.OPENCODE_DB_PATH = opencodeDbPath;
-  process.env.TEST_OPENCODE_DB_PATH = opencodeDbPath;
-  process.env.TEST_OPENCODE_DB_QUERY_JSON = dbQueryPath;
-  process.env.TEST_OPENCODE_EXPORT_DIR = exportDir;
-  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
-}
+    assert.deepEqual(
+      fs.readdirSync(path.join(root, "opencode-exports")).sort(),
+      ["fresh_session.json"]
+    );
+  });
+});
 
 test("runImport bootstraps the database and records discovered captures", () => {
   withTempEnv((root) => {
@@ -254,15 +149,7 @@ test("runImport persists recoverable inline raw content for file-backed captures
         WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
       `)
       .get() as { id: number; raw_sha256: string; source_size_bytes: number };
-    const expectedRawText = fs.readFileSync(
-      path.join(
-        root,
-        ".codex",
-        "archived_sessions",
-        "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"
-      ),
-      "utf8"
-    );
+    const expectedRawText = fs.readFileSync(getInstalledFixtureSourcePath(root, "codex-live-session"), "utf8");
 
     try {
       const contentRef = getCaptureContentRef(db, capture.id);
@@ -273,6 +160,38 @@ test("runImport persists recoverable inline raw content for file-backed captures
       assert.equal(contentRef?.sha256, capture.raw_sha256);
       assert.equal(contentRef?.byteSize, capture.source_size_bytes);
       assert.equal(readCaptureText(db, capture.id), expectedRawText);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("runImport persists blob-backed raw content for the large shared fixture", () => {
+  withTempEnv((root) => {
+    installIngestFixtures(root, ["large-capture-blob"]);
+    writeFakeOpenCodeExecutable(root, [], {});
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const capture = db
+      .prepare(`
+        SELECT id, raw_sha256, source_size_bytes
+        FROM captures
+        WHERE external_session_id = 'blob-large-session'
+      `)
+      .get() as { id: number; raw_sha256: string; source_size_bytes: number };
+    const expectedRawText = fs.readFileSync(getInstalledFixtureSourcePath(root, "large-capture-blob"), "utf8");
+
+    try {
+      const contentRef = getCaptureContentRef(db, capture.id);
+
+      assert.ok(contentRef);
+      assert.equal(contentRef?.kind, "blob");
+      assert.equal(contentRef?.sha256, capture.raw_sha256);
+      assert.equal(contentRef?.byteSize, capture.source_size_bytes);
+      assert.ok((contentRef?.byteSize ?? 0) > getInlineCaptureMaxBytes());
+      assert.equal(readCaptureText(db, capture.id), expectedRawText);
+      assert.equal(report.sourceSummaries.find((summary) => summary.kind === "codex")?.importedCaptures, 1);
     } finally {
       db.close();
     }
@@ -354,13 +273,7 @@ test("runImport reimports changed captures and refreshes normalized session cont
     writeFixtureFiles(root);
 
     const first = runImport();
-
-    const codexCapturePath = path.join(
-      root,
-      ".codex",
-      "archived_sessions",
-      "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"
-    );
+    const codexCapturePath = getInstalledFixtureSourcePath(root, "codex-live-session");
 
     fs.writeFileSync(
       codexCapturePath,
@@ -414,6 +327,53 @@ test("runImport reimports changed captures and refreshes normalized session cont
   });
 });
 
+test("runImport preserves the prior projection when a fixture-backed changed capture fails to parse", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const first = runImport();
+    const codexCapturePath = getInstalledFixtureSourcePath(root, "codex-live-session");
+
+    fs.writeFileSync(codexCapturePath, readFixtureCaptureText("parse-failure-after-snapshot"));
+
+    const second = runImport();
+    const db = new DatabaseSync(first.databasePath);
+    const captures = db
+      .prepare(`
+        SELECT status
+        FROM captures
+        WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
+        ORDER BY id ASC
+      `)
+      .all() as Array<{ status: string }>;
+    const messages = db
+      .prepare(`
+        SELECT role, text
+        FROM messages
+        WHERE session_id = (
+          SELECT id
+          FROM sessions
+          WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
+        )
+        ORDER BY ordinal ASC
+      `)
+      .all()
+      .map((row) => ({ ...row })) as Array<{ role: string; text: string }>;
+
+    try {
+      assert.deepEqual(captures.map((row) => row.status), ["normalized", "failed_parse"]);
+      assert.deepEqual(messages, [
+        { role: "user", text: "hello codex" },
+        { role: "assistant", text: "I will update the code." }
+      ]);
+      assert.equal(second.sourceSummaries.find((summary) => summary.kind === "codex")?.importedCaptures, 0);
+      assert.equal(second.sourceSummaries.find((summary) => summary.kind === "codex")?.failedCaptures, 1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 test("runImport imports Codex sessions from the live sessions directory", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
@@ -464,6 +424,78 @@ test("runImport imports Codex sessions from the live sessions directory", () => 
   });
 });
 
+test("runImport links imported artifacts to projected messages while preserving capture provenance", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const claudePath = path.join(root, ".claude", "projects", "demo-project");
+    fs.writeFileSync(
+      path.join(claudePath, "artifact-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "u1",
+          sessionId: "artifact-session",
+          timestamp: "2026-03-25T11:05:00.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Inspect the file read tool activity" }]
+          }
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "a1",
+          parentUuid: "u1",
+          sessionId: "artifact-session",
+          timestamp: "2026-03-25T11:05:05.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Running tool" },
+              { type: "tool_use", name: "Read", input: { file_path: "/tmp/demo/src/app.ts" } },
+              { type: "tool_result", content: "ok" }
+            ]
+          }
+        })
+      ].join("\n")
+    );
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const artifactRows = db
+      .prepare(`
+        SELECT
+          a.kind,
+          a.message_id,
+          a.capture_record_id,
+          m.external_message_id
+        FROM artifacts a
+        LEFT JOIN messages m ON m.id = a.message_id
+        WHERE a.session_id = (
+          SELECT id
+          FROM sessions
+          WHERE external_session_id = 'artifact-session'
+        )
+        ORDER BY a.id ASC
+      `)
+      .all() as Array<{
+      kind: string;
+      message_id: number | null;
+      capture_record_id: number | null;
+      external_message_id: string | null;
+    }>;
+
+    assert.equal(report.sourceSummaries.find((summary) => summary.kind === "claude_code")?.importedCaptures, 2);
+    assert.deepEqual(artifactRows.map((row) => row.kind), ["tool_call", "tool_result"]);
+    assert.equal(artifactRows.every((row) => typeof row.message_id === "number"), true);
+    assert.equal(artifactRows.every((row) => typeof row.capture_record_id === "number"), true);
+    assert.equal(new Set(artifactRows.map((row) => row.message_id)).size, 1);
+    assert.equal(artifactRows[0]?.external_message_id, "a1");
+
+    db.close();
+  });
+});
+
 test("runImport prefers live Codex sessions over archived duplicates", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);
@@ -471,6 +503,7 @@ test("runImport prefers live Codex sessions over archived duplicates", () => {
     const externalSessionId = "live1234-1111-2222-3333-abcdefabcdef";
     const archivedCodexPath = path.join(root, ".codex", "archived_sessions");
     const liveCodexPath = path.join(root, ".codex", "sessions", "2026", "03", "30");
+    ensureDirectory(archivedCodexPath);
     ensureDirectory(liveCodexPath);
 
     fs.writeFileSync(
@@ -1472,5 +1505,176 @@ test("openDistillDatabase migrates legacy failed capture statuses to failed_pars
     assert.equal(capture.status, "failed_parse");
 
     db.close();
+  });
+});
+
+test("openDistillDatabase adds the legacy artifacts.message_id column before artifact writes resume", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const databasePath = path.join(process.env.DISTILL_HOME ?? path.join(root, ".distill"), "distill.db");
+    ensureDirectory(path.dirname(databasePath));
+
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(fs.readFileSync(path.resolve(process.cwd(), "schema.sql"), "utf8"));
+    legacyDb.exec("DROP TABLE artifacts");
+    legacyDb.exec(`
+      CREATE TABLE artifacts (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+        capture_record_id INTEGER REFERENCES capture_records(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        mime_type TEXT,
+        blob_path TEXT,
+        sha256 TEXT,
+        byte_size INTEGER,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    legacyDb.exec(`
+      CREATE INDEX idx_artifacts_session
+        ON artifacts(session_id)
+    `);
+    legacyDb.close();
+
+    const distillDb = openDistillDatabase();
+    try {
+      distillDb.db.prepare(`
+        INSERT INTO artifacts (message_id, kind, metadata_json)
+        VALUES (?, ?, ?)
+      `).run(null, "tool_call", "{}");
+    } finally {
+      distillDb.close();
+    }
+
+    const db = new DatabaseSync(databasePath);
+    const artifactColumns = db
+      .prepare("PRAGMA table_info(artifacts)")
+      .all() as Array<{ name: string; type: string }>;
+    const artifact = db
+      .prepare("SELECT message_id, kind FROM artifacts LIMIT 1")
+      .get() as { message_id: number | null; kind: string };
+
+    assert.equal(artifactColumns.some((column) => column.name === "message_id"), true);
+    assert.equal(artifactColumns.find((column) => column.name === "message_id")?.type, "INTEGER");
+    assert.equal(artifact.message_id, null);
+    assert.equal(artifact.kind, "tool_call");
+
+    db.close();
+  });
+});
+
+test("openDistillDatabase backfills legacy artifact message links from the last projected message for shared provenance", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const databasePath = path.join(process.env.DISTILL_HOME ?? path.join(root, ".distill"), "distill.db");
+    ensureDirectory(path.dirname(databasePath));
+
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(fs.readFileSync(path.resolve(process.cwd(), "schema.sql"), "utf8"));
+    legacyDb
+      .prepare(`
+        INSERT INTO sources (id, kind, display_name, install_status, metadata_json)
+        VALUES (1, 'claude_code', 'Claude Code', 'installed', '{}')
+      `)
+      .run();
+    legacyDb
+      .prepare(`
+        INSERT INTO sessions (
+          id, source_id, external_session_id, title, message_count, raw_capture_count, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(40, 1, "legacy-artifact-link", "Legacy artifact link", 2, 1, "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO captures (
+          id, source_id, capture_kind, source_path, raw_sha256, parser_version, status, captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(7, 1, "project_session", "/tmp/demo/session.jsonl", "legacy-sha", "v0", "normalized", "2026-03-25T15:00:00Z");
+    legacyDb
+      .prepare(`
+        INSERT INTO capture_records (
+          id, capture_id, line_no, record_type, provider_message_id, role, is_meta, content_json, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(500, 7, 8, "assistant", "msg-1", "assistant", 0, "{}", "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO messages (
+          id, session_id, capture_record_id, external_message_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(200, 40, 500, "msg-1", 1, "assistant", "Running tool", "hash-1", "2026-03-25T15:00:00Z", "text", "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO messages (
+          id, session_id, capture_record_id, external_message_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(201, 40, 500, "msg-1b", 2, "assistant", "Tool finished", "hash-2", "2026-03-25T15:00:02Z", "text", "{}");
+    legacyDb
+      .prepare(`
+        INSERT INTO artifacts (
+          session_id, message_id, capture_record_id, kind, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(40, null, 500, "tool_call", "{}", "2026-03-25T15:00:01Z");
+    legacyDb.close();
+
+    const distillDb = openDistillDatabase();
+    distillDb.close();
+
+    const db = new DatabaseSync(databasePath);
+    const artifact = db
+      .prepare(`
+        SELECT message_id, capture_record_id
+        FROM artifacts
+        WHERE session_id = 40
+      `)
+      .get() as { message_id: number | null; capture_record_id: number | null };
+
+    assert.equal(artifact.message_id, 201);
+    assert.equal(artifact.capture_record_id, 500);
+
+    db.close();
+  });
+});
+
+test("runInTransaction rejects async callbacks before executing their bodies", () => {
+  withTempEnv(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.exec(`
+      CREATE TABLE tx_async_guard (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+
+    let invoked = false;
+    const asyncCallback = async () => {
+      invoked = true;
+      db.prepare("INSERT INTO tx_async_guard (value) VALUES (?)").run("leaked");
+      await Promise.resolve();
+      return 1;
+    };
+
+    assert.throws(
+      () => runInTransaction(db, asyncCallback as unknown as () => never),
+      /runInTransaction does not support async functions/
+    );
+
+    const rowCount = db
+      .prepare("SELECT COUNT(*) AS count FROM tx_async_guard")
+      .get() as { count: number };
+
+    assert.equal(invoked, false);
+    assert.equal(rowCount.count, 0);
+
+    distillDb.close();
   });
 });

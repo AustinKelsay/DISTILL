@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { addSessionTag, getDefaultLabelNames, removeSessionTag, toggleSessionLabel } from "../distill/curation";
 import { buildDoctorReport } from "../distill/doctor";
-import { exportSessionsByLabel } from "../distill/export";
+import { exportApprovedSessions } from "../distill/export";
 import { getLogsPageData } from "../distill/logs";
 import { setSourceColor } from "../distill/preferences";
 import { getDashboardData, getSessionDetail, searchSessions } from "../distill/query";
@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld("distillApi", {
   removeSessionTag: (sessionId: number, tagId: number) => removeSessionTag(sessionId, tagId),
   toggleSessionLabel: (sessionId: number, labelName: string) => toggleSessionLabel(sessionId, labelName),
   getDefaultLabelNames: () => getDefaultLabelNames(),
-  exportSessionsByLabel: (label: string) => exportSessionsByLabel(label),
+  exportApprovedSessions: (dataset: string) => exportApprovedSessions(dataset),
   setSourceColor: (sourceKind: string, color: string) => setSourceColor(sourceKind, color) as SourceColors,
   getAppSettings: () => getAppSettingsSnapshot() as AppSettingsSnapshot,
   getDbExplorerSnapshot: () =>

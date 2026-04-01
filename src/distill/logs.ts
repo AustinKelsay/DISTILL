@@ -1,6 +1,7 @@
 import { openDistillDatabase } from "./db";
 import { getBackgroundSyncStatus } from "./jobs";
 import {
+  DatasetExportTarget,
   ImportFailureEntry,
   ImportSourceSummary,
   LogEntry,
@@ -38,10 +39,12 @@ type SyncPayload = {
   summary?: string;
   sourceSummaries?: ImportSourceSummary[];
   failedEntries?: ImportFailureEntry[];
+  outcome?: "completed" | "warning" | "failed";
 };
 
 type ExportPayload = {
   exportedAt?: string;
+  dataset?: DatasetExportTarget;
 };
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -53,13 +56,25 @@ function parseJson<T>(value: string, fallback: T): T {
   }
 }
 
-function normalizeSyncStatus(status: string): LogEntryStatus {
+function hasSyncWarnings(payload: Pick<SyncPayload, "failedCaptures" | "failedEntries">): boolean {
+  return (payload.failedCaptures ?? 0) > 0 || (payload.failedEntries?.length ?? 0) > 0;
+}
+
+function normalizeSyncStatus(status: string, payload: SyncPayload): LogEntryStatus {
   if (status === "pending") {
     return "queued";
   }
 
-  if (status === "running" || status === "completed" || status === "failed") {
+  if (status === "running" || status === "warning" || status === "failed") {
     return status;
+  }
+
+  if (status === "completed") {
+    if (payload.outcome) {
+      return payload.outcome;
+    }
+
+    return hasSyncWarnings(payload) ? "warning" : "completed";
   }
 
   return "queued";
@@ -78,6 +93,10 @@ function summarizeSync(status: LogEntryStatus, payload: SyncPayload): string {
     return `Sync running${payload.reason ? `: ${payload.reason}` : ""}`;
   }
 
+  if (status === "warning") {
+    return "Sync warnings";
+  }
+
   if (status === "failed") {
     return "Sync failed";
   }
@@ -89,12 +108,20 @@ function stringifyRaw(value: Record<string, unknown>): string {
   return JSON.stringify(value, null, 2);
 }
 
+function normalizeExportDataset(value: string | null | undefined): DatasetExportTarget | undefined {
+  if (value === "train" || value === "holdout") {
+    return value;
+  }
+
+  return undefined;
+}
+
 function mapSyncJob(row: SyncJobRow): LogEntry {
   const payload = parseJson<SyncPayload>(row.payload_json, {});
-  const status = normalizeSyncStatus(row.status);
+  const status = normalizeSyncStatus(row.status, payload);
   const failedEntries = payload.failedEntries ?? [];
   const failedCaptures = payload.failedCaptures ?? 0;
-  const level = status === "failed" || failedCaptures > 0 || failedEntries.length > 0 ? "error" : "info";
+  const level = status === "failed" ? "error" : "info";
 
   return {
     id: `sync-${row.id}`,
@@ -128,7 +155,8 @@ function mapSyncJob(row: SyncJobRow): LogEntry {
 
 function mapExport(row: ExportRow): LogEntry {
   const payload = parseJson<ExportPayload>(row.metadata_json, {});
-  const label = row.label_filter ?? "all";
+  const dataset = normalizeExportDataset(payload.dataset ?? row.label_filter);
+  const datasetLabel = dataset ?? row.label_filter ?? "all";
   const recordLabel = row.record_count === 1 ? "record" : "records";
 
   return {
@@ -137,21 +165,21 @@ function mapExport(row: ExportRow): LogEntry {
     status: "completed",
     level: "info",
     title: "Export",
-    summary: `Exported ${row.record_count} ${label} ${recordLabel}`,
+    summary: `Exported ${row.record_count} ${datasetLabel} dataset ${recordLabel}`,
     createdAt: payload.exportedAt ?? row.created_at,
     updatedAt: payload.exportedAt ?? row.created_at,
-    sourceLabel: label,
+    sourceLabel: datasetLabel,
     metrics: {
       recordCount: row.record_count
     },
     details: {
-      label,
+      dataset,
       outputPath: row.output_path
     },
     rawJson: stringifyRaw({
       exportId: row.id,
       exportType: row.export_type,
-      label,
+      dataset: datasetLabel,
       outputPath: row.output_path,
       recordCount: row.record_count,
       ...payload

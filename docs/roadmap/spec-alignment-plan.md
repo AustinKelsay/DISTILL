@@ -6,6 +6,12 @@ This document is normative for the sequencing of the spec realignment program.
 
 Make Distill’s documentation truthful, tech-agnostic, and hard to drift from, then use that spec package to drive future implementation branches.
 
+## Current Status
+
+As of 2026-03-31, the branch sequence below is implemented in the current tree and should be read as the historical spec-alignment program that produced the current baseline.
+
+Use the gap register for any newly discovered drift. Add new roadmap entries only when future work changes canonical behavior or opens a new staged-alignment branch.
+
 ## Branch Sequence
 
 ### 1. `docs/spec-foundation`
@@ -95,6 +101,25 @@ Acceptance criteria:
 - every critical invariant has at least one named test scenario
 - fixture expectations are concrete
 - branch mapping is complete
+
+### 5A. `test/connector-contract-hardening`
+
+Scope:
+
+- shared ingest fixture corpus under `src/test/fixtures/ingest/`
+- typed fixture/install helper under `src/test/support/ingest_fixtures.ts`
+- executable connector contract suite in `src/test/connector_contract.test.ts`
+- refactor core parse and import tests to reuse the shared fixture corpus where it reduces duplication
+
+Depends on:
+
+- `docs/test-matrix`
+
+Acceptance criteria:
+
+- `CC-001`, `CC-002`, and `CC-003` are executable and passing against the shared fixture corpus
+- the fixture manifest covers Codex live plus archived duplicate, Claude mixed structured blocks, OpenCode visible meta export, parse-failure, snapshot-failure, and large blob-backed capture cases
+- import and parse tests reuse the shared fixture corpus for at least raw persistence, projection replacement, and parse-failure rollback coverage
 
 ### 6. `test/raw-capture-contracts`
 
