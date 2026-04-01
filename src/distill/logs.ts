@@ -1,6 +1,7 @@
 import { openDistillDatabase } from "./db";
 import { getBackgroundSyncStatus } from "./jobs";
 import {
+  DatasetExportTarget,
   ImportFailureEntry,
   ImportSourceSummary,
   LogEntry,
@@ -43,7 +44,7 @@ type SyncPayload = {
 
 type ExportPayload = {
   exportedAt?: string;
-  dataset?: string;
+  dataset?: DatasetExportTarget;
 };
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -107,6 +108,14 @@ function stringifyRaw(value: Record<string, unknown>): string {
   return JSON.stringify(value, null, 2);
 }
 
+function normalizeExportDataset(value: string | null | undefined): DatasetExportTarget | undefined {
+  if (value === "train" || value === "holdout") {
+    return value;
+  }
+
+  return undefined;
+}
+
 function mapSyncJob(row: SyncJobRow): LogEntry {
   const payload = parseJson<SyncPayload>(row.payload_json, {});
   const status = normalizeSyncStatus(row.status, payload);
@@ -146,7 +155,8 @@ function mapSyncJob(row: SyncJobRow): LogEntry {
 
 function mapExport(row: ExportRow): LogEntry {
   const payload = parseJson<ExportPayload>(row.metadata_json, {});
-  const dataset = payload.dataset ?? row.label_filter ?? "all";
+  const dataset = normalizeExportDataset(payload.dataset ?? row.label_filter);
+  const datasetLabel = dataset ?? row.label_filter ?? "all";
   const recordLabel = row.record_count === 1 ? "record" : "records";
 
   return {
@@ -155,10 +165,10 @@ function mapExport(row: ExportRow): LogEntry {
     status: "completed",
     level: "info",
     title: "Export",
-    summary: `Exported ${row.record_count} ${dataset} dataset ${recordLabel}`,
+    summary: `Exported ${row.record_count} ${datasetLabel} dataset ${recordLabel}`,
     createdAt: payload.exportedAt ?? row.created_at,
     updatedAt: payload.exportedAt ?? row.created_at,
-    sourceLabel: dataset,
+    sourceLabel: datasetLabel,
     metrics: {
       recordCount: row.record_count
     },
@@ -169,7 +179,7 @@ function mapExport(row: ExportRow): LogEntry {
     rawJson: stringifyRaw({
       exportId: row.id,
       exportType: row.export_type,
-      dataset,
+      dataset: datasetLabel,
       outputPath: row.output_path,
       recordCount: row.record_count,
       ...payload

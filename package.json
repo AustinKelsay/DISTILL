@@ -1,7 +1,7 @@
 {
   "name": "distill",
   "version": "0.1.0",
-  "description": "Local-first conversation collector for Codex CLI and Claude Code",
+  "description": "Local-first conversation collector for Codex CLI, Claude Code, and OpenCode",
   "main": "dist/electron/main.js",
   "private": true,
   "scripts": {

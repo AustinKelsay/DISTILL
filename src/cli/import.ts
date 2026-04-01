@@ -3,7 +3,7 @@ import { runImport } from "../distill/import";
 function printHelp(): void {
   console.log("Usage: npm run import");
   console.log("");
-  console.log("Discovers local Codex and Claude Code captures and imports them into the Distill database.");
+  console.log("Discovers local Codex, Claude Code, and OpenCode captures and imports them into the Distill database.");
 }
 
 function main(): void {

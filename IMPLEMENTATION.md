@@ -75,6 +75,7 @@ The current codebase already implements the core local-first MVP loop defined in
 Current implementation highlights:
 
 - recoverable raw capture storage for file-backed and virtual captures
+- inline raw payloads of `64 KiB` or less are stored directly in the capture record, and larger payloads are stored in the Distill blob area
 - append-only capture history plus replace-on-success session projection writes
 - canonical activity auditing for capture, projection, curation, export, and sync lifecycle
 - direct artifact-to-message linkage alongside capture-record provenance

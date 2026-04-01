@@ -504,9 +504,15 @@ export function searchSessions(query: string, limit?: number): SearchResult[] {
 
   const distillDb = openDistillDatabase();
   try {
-    const maxResults =
-      limit
-      ?? ((distillDb.db.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }).count);
+    const totalCount = (
+      distillDb.db.prepare("SELECT COUNT(*) AS count FROM sessions").get() as { count: number }
+    ).count;
+    const requestedLimit = limit ?? totalCount;
+    const maxResults = Math.max(0, Math.min(totalCount, requestedLimit));
+    if (maxResults === 0) {
+      return [];
+    }
+
     const hitLimit = Math.max(maxResults * 8, 20);
 
     const hitRows = distillDb.db

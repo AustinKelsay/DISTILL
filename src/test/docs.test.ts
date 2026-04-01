@@ -9,6 +9,10 @@ function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+function readRepoJson(relativePath: string): unknown {
+  return JSON.parse(readRepoFile(relativePath));
+}
+
 test("canonical docs package exists", () => {
   const requiredFiles = [
     "docs/README.md",
@@ -129,6 +133,38 @@ test("gap register and contract test matrix track the required drift-guard surfa
   assert.match(governance, /PR Checklist/);
   assert.match(governance, /How To Record Gaps/);
   assert.match(governance, /How To Add New Source Connectors/);
+});
+
+test("ingest fixture manifest covers the required shared connector-contract corpus", () => {
+  const testMatrix = readRepoFile("docs/testing/contract-test-matrix.md");
+  const fixtureManifest = readRepoJson("src/test/fixtures/ingest/manifest.json") as Array<Record<string, unknown>>;
+  const requiredFixtureIds = [
+    "codex-live-session",
+    "codex-archived-duplicate",
+    "claude-mixed-blocks",
+    "opencode-visible-meta",
+    "parse-failure-after-snapshot",
+    "snapshot-failure-missing-source",
+    "large-capture-blob"
+  ];
+
+  assert.match(testMatrix, /src\/test\/connector_contract\.test\.ts/);
+  assert.match(testMatrix, /src\/test\/support\/ingest_fixtures\.ts/);
+  assert.match(testMatrix, /src\/test\/fixtures\/ingest\/manifest\.json/);
+
+  assert.equal(Array.isArray(fixtureManifest), true);
+
+  for (const fixtureId of requiredFixtureIds) {
+    const fixture = fixtureManifest.find((entry) => entry.id === fixtureId) as Record<string, unknown> | undefined;
+
+    assert.ok(fixture, `${fixtureId} should be present in the shared ingest fixture manifest`);
+    assert.equal(Array.isArray(fixture?.scenarioIds), true, `${fixtureId} should declare scenario ids`);
+    assert.equal(
+      fs.existsSync(path.join(repoRoot, "src/test/fixtures/ingest", String(fixture?.fixtureDir))),
+      true,
+      `${fixtureId} fixture directory should exist`
+    );
+  }
 });
 
 test("agent instruction files exist and point agents to the canonical docs in order", () => {

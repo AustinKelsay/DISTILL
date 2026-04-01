@@ -173,6 +173,10 @@ export type ExportReport = {
   recordCount: number;
 };
 
+// Export records intentionally keep snake_case field names to match the
+// external JSON schema consumed by Python/ML tooling. Renaming any of these
+// fields requires coordinated updates across the export/ingest pipeline and
+// downstream consumers.
 export type ExportMessageRecord = {
   ordinal: number;
   role: string;
@@ -248,7 +252,7 @@ export type LogEntry = {
   details?: {
     reason?: string;
     outputPath?: string;
-    dataset?: string;
+    dataset?: DatasetExportTarget;
     sourceSummaries?: ImportSourceSummary[];
     failedEntries?: ImportFailureEntry[];
   };

@@ -360,7 +360,7 @@ test("exportApprovedSessions trims and normalizes the requested dataset", () => 
   });
 });
 
-test("exportApprovedSessions excludes review-only sessions and preserves favorite metadata", () => {
+test("exportApprovedSessions excludes review-only and conflicting dataset-label sessions and preserves favorite metadata", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
     const db = distillDb.db;
@@ -377,7 +377,8 @@ test("exportApprovedSessions excludes review-only sessions and preserves favorit
       ) VALUES
       (50, 1, 'session-safe', 'Safe train session', '/tmp/demo', '2026-03-25T18:00:00Z', 1, 1, '{}'),
       (51, 1, 'session-review', 'Sensitive train session', '/tmp/demo', '2026-03-25T18:01:00Z', 1, 1, '{}'),
-      (52, 1, 'session-favorite', 'Favorite train session', '/tmp/demo', '2026-03-25T18:02:00Z', 1, 1, '{}')
+      (52, 1, 'session-favorite', 'Favorite train session', '/tmp/demo', '2026-03-25T18:02:00Z', 1, 1, '{}'),
+      (53, 1, 'session-ambiguous', 'Ambiguous dataset session', '/tmp/demo', '2026-03-25T18:03:00Z', 1, 1, '{}')
     `).run();
 
     db.prepare(`
@@ -386,7 +387,8 @@ test("exportApprovedSessions excludes review-only sessions and preserves favorit
       ) VALUES
       (50, 1, 'user', 'Safe train payload', 'safe', '2026-03-25T18:00:00Z', 'text', '{}'),
       (51, 1, 'user', 'Sensitive train payload', 'review', '2026-03-25T18:01:00Z', 'text', '{}'),
-      (52, 1, 'user', 'Favorite train payload', 'favorite', '2026-03-25T18:02:00Z', 'text', '{}')
+      (52, 1, 'user', 'Favorite train payload', 'favorite', '2026-03-25T18:02:00Z', 'text', '{}'),
+      (53, 1, 'user', 'Ambiguous train payload', 'ambiguous', '2026-03-25T18:03:00Z', 'text', '{}')
     `).run();
 
     distillDb.close();
@@ -397,6 +399,26 @@ test("exportApprovedSessions excludes review-only sessions and preserves favorit
     toggleSessionLabel(51, "sensitive");
     toggleSessionLabel(52, "train");
     toggleSessionLabel(52, "favorite");
+
+    const labelDb = openDistillDatabase();
+    try {
+      const labelIds = labelDb.db.prepare(`
+        SELECT id
+        FROM labels
+        WHERE name IN ('train', 'holdout')
+        ORDER BY name ASC
+      `).all() as Array<{ id: number }>;
+      const insertAssignment = labelDb.db.prepare(`
+        INSERT INTO label_assignments (object_type, object_id, label_id, origin)
+        VALUES ('session', 53, ?, 'manual')
+      `);
+
+      for (const label of labelIds) {
+        insertAssignment.run(label.id);
+      }
+    } finally {
+      labelDb.close();
+    }
 
     const report = exportApprovedSessions("train");
     const payloads = fs.readFileSync(report.outputPath, "utf8")
@@ -412,6 +434,7 @@ test("exportApprovedSessions excludes review-only sessions and preserves favorit
       ["session-favorite", "session-safe"]
     );
     assert.equal(payloads.some((payload) => payload.external_session_id === "session-review"), false);
+    assert.equal(payloads.some((payload) => payload.external_session_id === "session-ambiguous"), false);
     assert.deepEqual(favoritePayload?.labels, ["favorite", "train"]);
   });
 });

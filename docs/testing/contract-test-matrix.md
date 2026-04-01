@@ -8,7 +8,7 @@ Where a `Primary Branch` or `Target Branch` is listed below, it records the firs
 
 | Suite | Purpose | Primary Branch |
 | --- | --- | --- |
-| `connector_contract` | Validate connector inputs and outputs remain within the canonical boundary. | `docs/test-matrix` |
+| `connector_contract` | Validate connector inputs and outputs remain within the canonical boundary. | `test/connector-contract-hardening` |
 | `raw_capture_persistence` | Validate Distill-owned recoverable raw capture storage. | `test/raw-capture-contracts` |
 | `projection_replacement` | Validate replace-on-success and rollback-on-failure projection semantics. | `test/raw-capture-contracts` |
 | `activity_audit` | Validate canonical audit event coverage. | `impl/activity-and-curation-audit` |
@@ -31,6 +31,12 @@ Shared fixture requirements:
 - one snapshot-failure fixture
 - one large capture fixture that requires blob-backed persistence
 
+Executable fixture sources:
+
+- shared fixture manifest: `src/test/fixtures/ingest/manifest.json`
+- fixture install/helper surface: `src/test/support/ingest_fixtures.ts`
+- connector contract executable suite: `src/test/connector_contract.test.ts`
+
 Every fixture must document:
 
 - source kind
@@ -44,9 +50,9 @@ Every fixture must document:
 
 | Scenario ID | Suite | Scenario | Expected DB State | Expected Query / UI Outcome | Failure Expectations | Target Branch |
 | --- | --- | --- | --- | --- | --- | --- |
-| `CC-001` | `connector_contract` | Codex connector emits only canonical parsed shapes. | Capture parse output contains one session payload plus raw records/messages/artifacts in canonical shapes. | No source-specific storage logic leaks into shared layers. | Test fails if connector writes non-canonical fields into shared contracts. | `docs/test-matrix` |
-| `CC-002` | `connector_contract` | Claude connector preserves text blocks and structured artifacts. | Parsed output includes text messages plus image/tool artifacts. | Session detail can show transcript and artifacts. | Test fails if tool/image blocks become transcript text unexpectedly. | `docs/test-matrix` |
-| `CC-003` | `connector_contract` | OpenCode connector preserves visible meta parts and structured artifacts. | Parsed output includes messages/artifacts with canonical roles and kinds. | Session detail can show structured parts without provider leakage. | Test fails if unknown structured parts are dropped. | `docs/test-matrix` |
+| `CC-001` | `connector_contract` | Codex connector emits only canonical parsed shapes. | Capture parse output contains one session payload plus raw records/messages/artifacts in canonical shapes. | No source-specific storage logic leaks into shared layers. | Test fails if connector writes non-canonical fields into shared contracts. | `test/connector-contract-hardening` |
+| `CC-002` | `connector_contract` | Claude connector preserves text blocks and structured artifacts. | Parsed output includes text messages plus image/tool artifacts. | Session detail can show transcript and artifacts. | Test fails if tool/image blocks become transcript text unexpectedly. | `test/connector-contract-hardening` |
+| `CC-003` | `connector_contract` | OpenCode connector preserves visible meta parts and structured artifacts. | Parsed output includes messages/artifacts with canonical roles and kinds. | Session detail can show structured parts without provider leakage. | Test fails if unknown structured parts are dropped. | `test/connector-contract-hardening` |
 | `RCP-001` | `raw_capture_persistence` | File-backed capture persists recoverable raw content. | Capture row resolves to a valid `CaptureContentRef` with checksum and byte size. | Replay tooling can recover the original raw content. | Test fails if only hashes/metadata are stored. | `test/raw-capture-contracts` |
 | `RCP-002` | `raw_capture_persistence` | Virtual OpenCode capture persists recoverable raw content. | Capture row resolves to Distill-owned content, not only transient process output. | Replay tooling can recover exported session JSON. | Test fails if replay depends on rerunning the source CLI. | `test/raw-capture-contracts` |
 | `PR-001` | `projection_replacement` | Exact duplicate re-import is skipped. | No new capture row, or new row is explicitly not inserted per dedupe policy; projection rows unchanged. | Session list/detail/search remain unchanged. | Test fails if duplicate import mutates projection rows. | `test/raw-capture-contracts` |
@@ -64,11 +70,11 @@ Every fixture must document:
 | `MC-001` | `manual_curation` | Manual tags appear in session detail and export. | Tag rows and assignments exist with manual origin. | Session detail and export payloads agree. | Test fails if export and detail diverge. | `docs/test-matrix` |
 | `MC-002` | `manual_curation` | Manual labels remain session-level only. | Label assignments target sessions and preserve origin. | Dataset-export behavior matches session detail state. | Test fails if label scope drifts silently. | `docs/test-matrix` |
 | `MC-003` | `manual_curation` | Enabling a dataset label removes conflicting dataset labels and audits both transitions. | Only one of `train`, `holdout`, or `exclude` remains assigned after the toggle; audit rows capture the disable and enable events. | Session detail and workflow state reflect the winning dataset label immediately. | Test fails if conflicting dataset labels coexist after a manual enable or if the automatic removal is silent. | `impl/curation-policy-export-safety` |
-| `MC-004` | `manual_curation` | Review-only labels preserve orthogonal labels while taking workflow priority. | `favorite` and `sensitive` can coexist with one dataset label, and `exclude` removes only conflicting dataset labels. | `Needs Review` shows `exclude` and `sensitive` sessions; `Favorites` still includes favorite sessions. | Test fails if orthogonal labels are dropped or workflow priority is wrong. | `impl/curation-policy-export-safety` |
+| `MC-004` | `manual_curation` | Review-only labels preserve orthogonal labels while taking workflow priority. | `favorite` and `sensitive` can coexist with one dataset label, and `exclude` removes only conflicting dataset labels. | `Needs Review` shows `exclude`, `sensitive`, and conflicting dataset-label sessions; `Favorites` still includes favorite sessions. | Test fails if orthogonal labels are dropped, conflicting dataset labels surface as export-ready, or workflow priority is wrong. | `impl/curation-policy-export-safety` |
 | `EC-001` | `export_contract` | Export uses current session projection, not raw history. | Export bookkeeping row exists; payload matches current projection. | Exported messages equal current session detail transcript. | Test fails if superseded rows appear in output. | `docs/test-matrix` |
 | `EC-002` | `export_contract` | Export includes manual curation metadata. | Export row and output include tags and labels. | Consumers can trust export metadata without re-querying Distill. | Test fails if tags/labels are missing or inconsistent. | `docs/test-matrix` |
 | `EC-003` | `export_contract` | Export preserves projection metadata and per-message transcript semantics. | Export payload includes session metadata plus message kind and message metadata from the current projection. | Consumers can distinguish text from meta messages, derive turn pairs from real assistant replies only, and recover session provenance without re-querying Distill. | Test fails if export drops session metadata, collapses `message_kind`, pairs turns from assistant meta rows, or omits message metadata. | `impl/projection-fidelity-export` |
-| `EC-004` | `export_contract` | Standard dataset export excludes review-only sessions. | Export rows are written for `train` and `holdout` targets only, and sessions with `exclude` or `sensitive` are omitted even when they carry a matching dataset label. | Operators get safe-by-default dataset exports from the main UI. | Test fails if `exclude` or `sensitive` sessions appear in standard dataset export. | `impl/curation-policy-export-safety` |
+| `EC-004` | `export_contract` | Standard dataset export excludes review-only or conflicting dataset-label sessions. | Export rows are written for `train` and `holdout` targets only, and sessions with `exclude`, `sensitive`, or conflicting dataset labels are omitted even when they carry a matching dataset label. | Operators get safe-by-default dataset exports from the main UI. | Test fails if `exclude`, `sensitive`, or conflicting dataset-label sessions appear in standard dataset export. | `impl/curation-policy-export-safety` |
 | `EC-005` | `export_contract` | Favorite sessions remain exportable only through their dataset label. | A session labeled `favorite` plus `train` or `holdout` exports with both labels preserved in metadata. | `Favorites` remains an organizational lane, not an export target. | Test fails if favorite-only sessions export or if favorite disappears from exported metadata. | `impl/curation-policy-export-safety` |
 | `SL-001` | `sync_jobs_and_logs` | Sync job summaries remain operational, not canonical audit. | Job rows contain sync status and metrics. | Logs show sync state while audit remains the source of truth. | Test fails if log behavior depends on missing audit guarantees. | `docs/test-matrix` |
 | `SL-002` | `sync_jobs_and_logs` | Export summaries remain visible in logs. | Export bookkeeping is preserved. | Logs show operational export summaries. | Test fails if export operations disappear from ops surfaces. | `docs/test-matrix` |

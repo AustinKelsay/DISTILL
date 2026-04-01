@@ -11,6 +11,12 @@ import { ensureDirectory } from "../distill/fs";
 import { getInlineCaptureMaxBytes, readCaptureContentText, resolveCaptureBlobPath } from "../distill/raw_capture";
 import { runImport } from "../distill/import";
 import { DiscoveredCapture } from "../shared/types";
+import {
+  getInstalledFixtureSourcePath,
+  installIngestFixtures,
+  readFixtureCaptureText,
+  writeFakeOpenCodeExecutable
+} from "./support/ingest_fixtures";
 
 type SavedEnv = Record<
   | "DISTILL_HOME"
@@ -72,135 +78,8 @@ function withTempEnv<T>(fn: (root: string) => T): T {
 }
 
 function writeFixtureFiles(root: string): void {
-  const codexPath = path.join(root, ".codex", "archived_sessions");
-  const claudePath = path.join(root, ".claude", "projects", "demo-project");
-  const opencodeConfigDir = path.join(root, ".config", "opencode");
-
-  ensureDirectory(codexPath);
-  ensureDirectory(claudePath);
-  ensureDirectory(opencodeConfigDir);
-  fs.writeFileSync(path.join(opencodeConfigDir, "opencode.json"), "{}\n");
-
-  fs.writeFileSync(
-    path.join(codexPath, "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"),
-    [
-      JSON.stringify({
-        timestamp: "2026-03-25T10:00:00.000Z",
-        type: "session_meta",
-        payload: { id: "abc12345-1111-2222-3333-abcdefabcdef", cwd: "/tmp/demo" }
-      }),
-      JSON.stringify({
-        timestamp: "2026-03-25T10:01:00.000Z",
-        type: "response_item",
-        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hello codex" }] }
-      })
-    ].join("\n")
-  );
-
-  fs.writeFileSync(
-    path.join(claudePath, "123e4567-e89b-12d3-a456-426614174000.jsonl"),
-    [
-      JSON.stringify({
-        type: "user",
-        uuid: "u1",
-        sessionId: "123e4567-e89b-12d3-a456-426614174000",
-        timestamp: "2026-03-25T11:00:00.000Z",
-        message: { role: "user", content: [{ type: "text", text: "hello claude" }] }
-      })
-    ].join("\n")
-  );
-
+  installIngestFixtures(root, ["codex-live-session", "claude-mixed-blocks"]);
   writeFakeOpenCodeExecutable(root, [], {});
-}
-
-function writeFakeOpenCodeExecutable(
-  root: string,
-  sessions: Array<Record<string, unknown>> | string,
-  exportsBySession: Record<string, string>
-): void {
-  const binDir = path.join(root, ".bin");
-  const opencodeDbPath = path.join(root, ".local", "share", "opencode", "opencode.db");
-  const dbQueryPath = path.join(root, "opencode-sessions.json");
-  const exportDir = path.join(root, "opencode-exports");
-
-  ensureDirectory(binDir);
-  ensureDirectory(path.dirname(opencodeDbPath));
-  ensureDirectory(exportDir);
-
-  fs.writeFileSync(opencodeDbPath, "");
-  fs.writeFileSync(dbQueryPath, typeof sessions === "string" ? sessions : JSON.stringify(sessions, null, 2));
-
-  for (const [sessionId, output] of Object.entries(exportsBySession)) {
-    fs.writeFileSync(path.join(exportDir, `${sessionId}.json`), output);
-  }
-
-  const safeExecPath = process.execPath
-    .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
-    .replace(/&/g, "^&")
-    .replace(/\|/g, "^|")
-    .replace(/</g, "^<")
-    .replace(/>/g, "^>")
-    .replace(/"/g, "\"\"");
-
-  const scriptPath = path.join(binDir, "opencode");
-  const cmdPath = path.join(binDir, "opencode.cmd");
-  fs.writeFileSync(
-    scriptPath,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-
-const args = process.argv.slice(2);
-
-if (args[0] === "db" && args[1] === "path") {
-  process.stdout.write(\`\${process.env.TEST_OPENCODE_DB_PATH ?? ""}\\n\`);
-  process.exit(0);
-}
-
-if (args[0] === "db") {
-  process.stdout.write(fs.readFileSync(process.env.TEST_OPENCODE_DB_QUERY_JSON, "utf8"));
-  process.exit(0);
-}
-
-if (args[0] === "export") {
-  const session = args[1];
-  const file = path.join(process.env.TEST_OPENCODE_EXPORT_DIR, \`\${session}.json\`);
-  if (!fs.existsSync(file)) {
-    process.stderr.write(\`missing export for \${session}\\n\`);
-    process.exit(1);
-  }
-
-  const output = fs.readFileSync(file);
-  const shouldTruncate =
-    process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE === "1"
-    && fs.fstatSync(1).isFIFO()
-    && output.length > 65536;
-
-  process.stderr.write(\`Exporting session: \${session}\\n\`);
-  process.stdout.write(shouldTruncate ? output.subarray(0, 65536) : output);
-  process.exit(0);
-}
-
-process.stderr.write("unsupported fake opencode command\\n");
-process.exit(1);
-`
-  );
-  fs.writeFileSync(
-    cmdPath,
-    `@echo off
-"${safeExecPath}" "%~dp0opencode" %*
-`
-  );
-  if (process.platform !== "win32") {
-    fs.chmodSync(scriptPath, 0o755);
-  }
-
-  process.env.OPENCODE_DB_PATH = opencodeDbPath;
-  process.env.TEST_OPENCODE_DB_PATH = opencodeDbPath;
-  process.env.TEST_OPENCODE_DB_QUERY_JSON = dbQueryPath;
-  process.env.TEST_OPENCODE_EXPORT_DIR = exportDir;
-  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
 }
 
 test("runImport bootstraps the database and records discovered captures", () => {
@@ -254,15 +133,7 @@ test("runImport persists recoverable inline raw content for file-backed captures
         WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
       `)
       .get() as { id: number; raw_sha256: string; source_size_bytes: number };
-    const expectedRawText = fs.readFileSync(
-      path.join(
-        root,
-        ".codex",
-        "archived_sessions",
-        "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"
-      ),
-      "utf8"
-    );
+    const expectedRawText = fs.readFileSync(getInstalledFixtureSourcePath(root, "codex-live-session"), "utf8");
 
     try {
       const contentRef = getCaptureContentRef(db, capture.id);
@@ -273,6 +144,38 @@ test("runImport persists recoverable inline raw content for file-backed captures
       assert.equal(contentRef?.sha256, capture.raw_sha256);
       assert.equal(contentRef?.byteSize, capture.source_size_bytes);
       assert.equal(readCaptureText(db, capture.id), expectedRawText);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("runImport persists blob-backed raw content for the large shared fixture", () => {
+  withTempEnv((root) => {
+    installIngestFixtures(root, ["large-capture-blob"]);
+    writeFakeOpenCodeExecutable(root, [], {});
+
+    const report = runImport();
+    const db = new DatabaseSync(report.databasePath);
+    const capture = db
+      .prepare(`
+        SELECT id, raw_sha256, source_size_bytes
+        FROM captures
+        WHERE external_session_id = 'blob-large-session'
+      `)
+      .get() as { id: number; raw_sha256: string; source_size_bytes: number };
+    const expectedRawText = fs.readFileSync(getInstalledFixtureSourcePath(root, "large-capture-blob"), "utf8");
+
+    try {
+      const contentRef = getCaptureContentRef(db, capture.id);
+
+      assert.ok(contentRef);
+      assert.equal(contentRef?.kind, "blob");
+      assert.equal(contentRef?.sha256, capture.raw_sha256);
+      assert.equal(contentRef?.byteSize, capture.source_size_bytes);
+      assert.ok((contentRef?.byteSize ?? 0) > getInlineCaptureMaxBytes());
+      assert.equal(readCaptureText(db, capture.id), expectedRawText);
+      assert.equal(report.sourceSummaries.find((summary) => summary.kind === "codex")?.importedCaptures, 1);
     } finally {
       db.close();
     }
@@ -354,13 +257,7 @@ test("runImport reimports changed captures and refreshes normalized session cont
     writeFixtureFiles(root);
 
     const first = runImport();
-
-    const codexCapturePath = path.join(
-      root,
-      ".codex",
-      "archived_sessions",
-      "rollout-2026-03-25T10-00-00-abc12345-1111-2222-3333-abcdefabcdef.jsonl"
-    );
+    const codexCapturePath = getInstalledFixtureSourcePath(root, "codex-live-session");
 
     fs.writeFileSync(
       codexCapturePath,
@@ -411,6 +308,53 @@ test("runImport reimports changed captures and refreshes normalized session cont
     ]);
 
     db.close();
+  });
+});
+
+test("runImport preserves the prior projection when a fixture-backed changed capture fails to parse", () => {
+  withTempEnv((root) => {
+    writeFixtureFiles(root);
+
+    const first = runImport();
+    const codexCapturePath = getInstalledFixtureSourcePath(root, "codex-live-session");
+
+    fs.writeFileSync(codexCapturePath, readFixtureCaptureText("parse-failure-after-snapshot"));
+
+    const second = runImport();
+    const db = new DatabaseSync(first.databasePath);
+    const captures = db
+      .prepare(`
+        SELECT status
+        FROM captures
+        WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
+        ORDER BY id ASC
+      `)
+      .all() as Array<{ status: string }>;
+    const messages = db
+      .prepare(`
+        SELECT role, text
+        FROM messages
+        WHERE session_id = (
+          SELECT id
+          FROM sessions
+          WHERE external_session_id = 'abc12345-1111-2222-3333-abcdefabcdef'
+        )
+        ORDER BY ordinal ASC
+      `)
+      .all()
+      .map((row) => ({ ...row })) as Array<{ role: string; text: string }>;
+
+    try {
+      assert.deepEqual(captures.map((row) => row.status), ["normalized", "failed_parse"]);
+      assert.deepEqual(messages, [
+        { role: "user", text: "hello codex" },
+        { role: "assistant", text: "I will update the code." }
+      ]);
+      assert.equal(second.sourceSummaries.find((summary) => summary.kind === "codex")?.importedCaptures, 0);
+      assert.equal(second.sourceSummaries.find((summary) => summary.kind === "codex")?.failedCaptures, 1);
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -543,6 +487,7 @@ test("runImport prefers live Codex sessions over archived duplicates", () => {
     const externalSessionId = "live1234-1111-2222-3333-abcdefabcdef";
     const archivedCodexPath = path.join(root, ".codex", "archived_sessions");
     const liveCodexPath = path.join(root, ".codex", "sessions", "2026", "03", "30");
+    ensureDirectory(archivedCodexPath);
     ensureDirectory(liveCodexPath);
 
     fs.writeFileSync(

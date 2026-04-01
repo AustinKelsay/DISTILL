@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { insertActivityEvent, openDistillDatabase } from "./db";
+import { insertActivityEvent, openDistillDatabase, runInTransaction } from "./db";
 import { DatasetExportTarget, SessionWorkflowState } from "../shared/types";
 
 const DEFAULT_LABELS = ["train", "holdout", "exclude", "sensitive", "favorite"] as const;
@@ -12,29 +12,6 @@ type ManualLabelAssignmentRow = {
   label_id: number;
   label_name: string;
 };
-
-function withTransaction<T>(db: DatabaseSync, fn: () => T): T {
-  let transactionOpen = false;
-
-  try {
-    db.exec("BEGIN");
-    transactionOpen = true;
-    const result = fn();
-    db.exec("COMMIT");
-    transactionOpen = false;
-    return result;
-  } catch (error) {
-    if (transactionOpen) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {
-        // Preserve the original transaction error below.
-      }
-    }
-
-    throw error;
-  }
-}
 
 function sessionExists(db: DatabaseSync, sessionId: number): boolean {
   const row = db
@@ -101,16 +78,22 @@ function getConflictingDatasetLabels(labelName: string): string[] {
 
 export function deriveSessionWorkflowState(labelNames: Iterable<string>): SessionWorkflowState {
   const labels = normalizeLabels(labelNames);
+  const hasTrain = labels.has("train");
+  const hasHoldout = labels.has("holdout");
 
   if (REVIEW_LABELS.some((label) => labels.has(label))) {
     return "needs_review";
   }
 
-  if (labels.has("train")) {
+  if (hasTrain && hasHoldout) {
+    return "needs_review";
+  }
+
+  if (hasTrain) {
     return "train_ready";
   }
 
-  if (labels.has("holdout")) {
+  if (hasHoldout) {
     return "holdout_ready";
   }
 
@@ -160,7 +143,7 @@ export function addSessionTag(sessionId: number, tagName: string): void {
 
   const distillDb = openDistillDatabase();
   try {
-    withTransaction(distillDb.db, () => {
+    runInTransaction(distillDb.db, () => {
       if (!sessionExists(distillDb.db, sessionId)) {
         return;
       }
@@ -207,7 +190,7 @@ export function addSessionTag(sessionId: number, tagName: string): void {
 export function removeSessionTag(sessionId: number, tagId: number): void {
   const distillDb = openDistillDatabase();
   try {
-    withTransaction(distillDb.db, () => {
+    runInTransaction(distillDb.db, () => {
       if (!sessionExists(distillDb.db, sessionId)) {
         return;
       }
@@ -259,7 +242,7 @@ export function toggleSessionLabel(sessionId: number, labelName: string): void {
 
   const distillDb = openDistillDatabase();
   try {
-    withTransaction(distillDb.db, () => {
+    runInTransaction(distillDb.db, () => {
       if (!sessionExists(distillDb.db, sessionId)) {
         return;
       }

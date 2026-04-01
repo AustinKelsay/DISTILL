@@ -102,6 +102,25 @@ Acceptance criteria:
 - fixture expectations are concrete
 - branch mapping is complete
 
+### 5A. `test/connector-contract-hardening`
+
+Scope:
+
+- shared ingest fixture corpus under `src/test/fixtures/ingest/`
+- typed fixture/install helper under `src/test/support/ingest_fixtures.ts`
+- executable connector contract suite in `src/test/connector_contract.test.ts`
+- refactor core parse and import tests to reuse the shared fixture corpus where it reduces duplication
+
+Depends on:
+
+- `docs/test-matrix`
+
+Acceptance criteria:
+
+- `CC-001`, `CC-002`, and `CC-003` are executable and passing against the shared fixture corpus
+- the fixture manifest covers Codex live plus archived duplicate, Claude mixed structured blocks, OpenCode visible meta export, parse-failure, snapshot-failure, and large blob-backed capture cases
+- import and parse tests reuse the shared fixture corpus for at least raw persistence, projection replacement, and parse-failure rollback coverage
+
 ### 6. `test/raw-capture-contracts`
 
 Scope:

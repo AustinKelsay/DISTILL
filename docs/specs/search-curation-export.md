@@ -122,10 +122,11 @@ Current canonical workflow interpretation:
 - `exclude`: review-only, never included in standard dataset export
 - `sensitive`: review-only modifier, blocks standard dataset export
 - `favorite`: bookmark-only, never an export target by itself
+- conflicting dataset labels such as both `train` and `holdout` are invalid state and must be treated as `needs_review` until manual relabeling resolves the conflict
 
 Current canonical session workflow states are:
 
-- `needs_review`: session has `exclude` or `sensitive`
+- `needs_review`: session has `exclude`, `sensitive`, or conflicting dataset labels such as both `train` and `holdout`
 - `train_ready`: session has `train` and does not have `exclude` or `sensitive`
 - `holdout_ready`: session has `holdout` and does not have `exclude` or `sensitive`
 - `favorite`: session has `favorite` and is not in another higher-priority workflow state
@@ -149,7 +150,7 @@ Current canonical Sessions filter lanes are:
 
 Lane semantics:
 
-- `Needs Review` contains sessions with `exclude` or `sensitive`
+- `Needs Review` contains sessions with `exclude`, `sensitive`, or conflicting dataset labels
 - `Train Ready` contains sessions with workflow state `train_ready`
 - `Holdout Ready` contains sessions with workflow state `holdout_ready`
 - `Favorites` contains sessions with label `favorite`
@@ -168,6 +169,7 @@ Dataset export eligibility rules:
 
 - a session is eligible for `train` export only when it has label `train` and does not have `exclude` or `sensitive`
 - a session is eligible for `holdout` export only when it has label `holdout` and does not have `exclude` or `sensitive`
+- sessions with conflicting dataset labels such as both `train` and `holdout` are invalid and must not appear in standard dataset export until relabeled
 - sessions with `exclude` are review-only and must not appear in standard dataset export
 - sessions with `sensitive` are review-only and must not appear in standard dataset export
 - `favorite` never makes a session exportable by itself

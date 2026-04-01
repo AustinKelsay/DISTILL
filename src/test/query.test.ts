@@ -251,6 +251,55 @@ test("query layer returns no results when search input yields zero FTS tokens", 
   });
 });
 
+test("query layer skips FTS when the requested limit clamps to zero", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'codex', 'Codex', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (23, 1, 'session-limit', 'Limit target', '/tmp/demo', '2026-03-25T13:41:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (104, 23, 1, 'user', 'analytics limit guard', 'limit-hash', '2026-03-25T13:41:00Z', 'text', '{}')
+    `).run();
+
+    distillDb.close();
+
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    let sawFtsPrepare = false;
+
+    DatabaseSync.prototype.prepare = function patchedPrepare(sql: string): ReturnType<typeof originalPrepare> {
+      if (sql.includes("FROM message_fts")) {
+        sawFtsPrepare = true;
+        throw new Error("FTS query should not run when maxResults is zero");
+      }
+
+      return originalPrepare.call(this, sql);
+    };
+
+    try {
+      assert.deepEqual(searchSessions("analytics", 0), []);
+      assert.deepEqual(searchSessions("analytics", -5), []);
+    } finally {
+      DatabaseSync.prototype.prepare = originalPrepare;
+    }
+
+    assert.equal(sawFtsPrepare, false);
+  });
+});
+
 test("query layer returns session tags and labels after manual curation", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
@@ -339,6 +388,64 @@ test("query layer returns the full session corpus and derives workflow states fr
     assert.deepEqual(reviewSession?.labels, ["sensitive", "train"]);
     assert.equal(favoriteSession?.workflowState, "train_ready");
     assert.deepEqual(favoriteSession?.labels, ["favorite", "train"]);
+  });
+});
+
+test("query layer treats conflicting dataset labels as needs_review", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'codex', 'Codex', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (104, 1, 'session-conflict', 'Conflicting labels', '/tmp/demo', '2026-03-25T15:31:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (304, 104, 1, 'user', 'Ambiguous dataset labels need review.', 'hash-104', '2026-03-25T15:31:00Z', 'text', '{}')
+    `).run();
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+
+    const labelDb = openDistillDatabase();
+    try {
+      const labels = labelDb.db.prepare(`
+        SELECT id
+        FROM labels
+        WHERE name IN ('train', 'holdout')
+        ORDER BY name ASC
+      `).all() as Array<{ id: number }>;
+      const insertAssignment = labelDb.db.prepare(`
+        INSERT INTO label_assignments (object_type, object_id, label_id, origin)
+        VALUES ('session', 104, ?, 'manual')
+      `);
+
+      for (const label of labels) {
+        insertAssignment.run(label.id);
+      }
+    } finally {
+      labelDb.close();
+    }
+
+    const session = listRecentSessions().find((entry) => entry.id === 104);
+    const result = searchSessions("Ambiguous dataset labels")[0];
+
+    assert.deepEqual(session?.labels, ["holdout", "train"]);
+    assert.equal(session?.workflowState, "needs_review");
+    assert.deepEqual(result?.labels, ["holdout", "train"]);
+    assert.equal(result?.workflowState, "needs_review");
   });
 });
 
