@@ -1,43 +1,97 @@
-# Distill
+# DISTILL
 
-Distill is a local-first desktop prototype for collecting, normalizing, inspecting, curating, and exporting local LLM chat history.
+DISTILL is a local-first desktop app for collecting, normalizing, searching, curating, and exporting local LLM chat history.
 
-## Implemented Now
+The point of DISTILL is simple: if you already have chat history on disk from tools like Codex CLI, Claude Code, or OpenCode, DISTILL gives you one local place to pull that data together, inspect it, organize it, and turn approved sessions into exportable datasets.
 
-- Electron + TypeScript desktop prototype
-- SQLite local database bootstrap from `schema.sql`
-- source detection and capture discovery for Codex CLI, Claude Code, and OpenCode
-- local capture persistence with recoverable raw capture storage for file-backed and virtual captures
-- import pipeline that parses local captures into normalized `sessions`, `messages`, `artifacts`, and `capture_records`
-- explicit replace-on-success session projection writes for `sessions`, `messages`, and `artifacts`
-- basic FTS-backed search over normalized session data
-- session detail, artifact inspection, DB explorer, logs, and settings views
-- manual session tags and labels
-- labeled JSONL export
-- import and sync activity auditing across capture, projection, curation, export, and sync lifecycle events
-- background sync jobs for local source refresh
-- tests for import, parse, query, export, jobs, logs, preferences, and DB inspection
+## Status
 
-## Not Implemented Now
+DISTILL is still in alpha and still being built out.
 
-- auto-tagging
-- embeddings or vector search
-- watched import folders
-- a local capture API
-- a generalized background job system beyond source sync
-- cloud sync
-- dataset versioning UI
+The core flow exists today, but the product is early. Expect active changes to the UI, workflows, and supported capabilities.
 
-## Canonical Specs
+## Supported Sources Right Now
 
-The authoritative architecture and planning docs live under [docs/README.md](docs/README.md).
+- Codex CLI
+- Claude Code
+- OpenCode
 
-Start here:
+## What DISTILL Does
 
-1. [docs/README.md](docs/README.md)
-2. [docs/specs/architecture.md](docs/specs/architecture.md)
-3. [docs/specs/data-model.md](docs/specs/data-model.md)
-4. [docs/specs/ingest-pipeline.md](docs/specs/ingest-pipeline.md)
-5. [docs/gaps/current-state-gap-register.md](docs/gaps/current-state-gap-register.md)
+- discovers supported local chat captures
+- snapshots and preserves raw capture content in DISTILL-owned local storage
+- normalizes sessions, messages, and artifacts into a local SQLite database
+- lets you search and review the current session projection
+- lets you manually label and tag sessions
+- exports approved sessions to JSONL
 
-The root docs are summaries and pointers. They are not the canonical source of truth.
+Everything is local-first. DISTILL reads local source data, stores its own local copy, and works from there.
+
+## DISTILL Flow
+
+```text
+Local source data
+(Codex / Claude Code / OpenCode)
+            |
+            v
+      Discover captures
+            |
+            v
+  Snapshot + preserve raw content
+            |
+            v
+   Normalize into local SQLite
+            |
+            v
+      Search and review
+            |
+            v
+   Curate with labels / tags
+            |
+            v
+    Export approved JSONL
+```
+
+## Local Setup
+
+If you just want to get DISTILL running locally right now:
+
+```bash
+npm install
+npm run doctor
+npm run import
+npm start
+```
+
+What those commands do:
+
+- `npm install` installs the app dependencies.
+- `npm run doctor` checks whether supported local sources are installed and detectable.
+- `npm run import` imports any discovered local chat history into DISTILL.
+- `npm start` builds and opens the Electron app.
+
+By default, DISTILL stores its local database and files in `~/.distill`. That directory is created automatically on first run.
+
+If you want to use a custom local data directory:
+
+```bash
+export DISTILL_HOME=/path/to/custom/.distill
+```
+
+If you want to export labeled data:
+
+```bash
+npm run export -- train
+```
+
+or:
+
+```bash
+npm run export -- holdout
+```
+
+## Canonical Docs
+
+This root README is intentionally simple.
+
+The authoritative architecture and product docs live under [docs/README.md](docs/README.md).

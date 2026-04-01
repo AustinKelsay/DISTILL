@@ -16,9 +16,33 @@ import {
   installIngestFixtures
 } from "./support/ingest_fixtures";
 
+type SavedEnv = Record<
+  | "CODEX_HOME"
+  | "CLAUDE_HOME"
+  | "OPENCODE_DB_PATH"
+  | "OPENCODE_CONFIG_DIR"
+  | "OPENCODE_STATE_DIR"
+  | "TEST_OPENCODE_DB_PATH"
+  | "TEST_OPENCODE_DB_QUERY_JSON"
+  | "TEST_OPENCODE_EXPORT_DIR"
+  | "TEST_OPENCODE_TRUNCATE_WHEN_PIPE"
+  | "PATH",
+  string | undefined
+>;
+
+function restoreEnv(saved: SavedEnv): void {
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
 function withTempFixtureEnv<T>(fn: (root: string) => T): T {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "distill-connector-contract-"));
-  const previous = {
+  const previous: SavedEnv = {
     CODEX_HOME: process.env.CODEX_HOME,
     CLAUDE_HOME: process.env.CLAUDE_HOME,
     OPENCODE_DB_PATH: process.env.OPENCODE_DB_PATH,
@@ -40,16 +64,7 @@ function withTempFixtureEnv<T>(fn: (root: string) => T): T {
   try {
     return fn(tempRoot);
   } finally {
-    process.env.CODEX_HOME = previous.CODEX_HOME;
-    process.env.CLAUDE_HOME = previous.CLAUDE_HOME;
-    process.env.OPENCODE_DB_PATH = previous.OPENCODE_DB_PATH;
-    process.env.OPENCODE_CONFIG_DIR = previous.OPENCODE_CONFIG_DIR;
-    process.env.OPENCODE_STATE_DIR = previous.OPENCODE_STATE_DIR;
-    process.env.TEST_OPENCODE_DB_PATH = previous.TEST_OPENCODE_DB_PATH;
-    process.env.TEST_OPENCODE_DB_QUERY_JSON = previous.TEST_OPENCODE_DB_QUERY_JSON;
-    process.env.TEST_OPENCODE_EXPORT_DIR = previous.TEST_OPENCODE_EXPORT_DIR;
-    process.env.TEST_OPENCODE_TRUNCATE_WHEN_PIPE = previous.TEST_OPENCODE_TRUNCATE_WHEN_PIPE;
-    process.env.PATH = previous.PATH;
+    restoreEnv(previous);
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }

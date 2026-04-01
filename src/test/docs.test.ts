@@ -65,14 +65,24 @@ test("root docs point to the canonical docs package and discovery is non-normati
   const implementation = readRepoFile("IMPLEMENTATION.md");
   const discovery = readRepoFile("DISCOVERY.md");
 
-  assert.match(readme, /Implemented Now/);
-  assert.match(readme, /Not Implemented Now/);
+  assert.match(readme, /^# DISTILL/m);
+  assert.match(readme, /## Status/);
+  assert.match(readme, /alpha/i);
+  assert.match(readme, /## Supported Sources Right Now/);
+  assert.match(readme, /Codex CLI/);
+  assert.match(readme, /Claude Code/);
+  assert.match(readme, /OpenCode/);
+  assert.match(readme, /## DISTILL Flow/);
+  assert.match(readme, /Discover captures/);
+  assert.match(readme, /Normalize into local SQLite/);
+  assert.match(readme, /Export approved JSONL/);
+  assert.match(readme, /## Local Setup/);
+  assert.match(readme, /npm run doctor/);
+  assert.match(readme, /npm run import/);
+  assert.match(readme, /npm start/);
+  assert.match(readme, /~\/\.distill/);
   assert.match(readme, /docs\/README\.md/);
-  assert.match(readme, /not the canonical source of truth/i);
-  assert.match(readme, /recoverable raw capture storage/i);
-  assert.match(readme, /activity auditing/i);
-  assert.doesNotMatch(readme, /^- Distill-owned recoverable raw capture storage(?:\b.*)?$/m);
-  assert.doesNotMatch(readme, /^- canonical activity auditing across projection, curation, and sync lifecycle(?:\b.*)?$/m);
+  assert.match(readme, /intentionally simple/i);
 
   assert.match(plan, /docs\/roadmap\/spec-alignment-plan\.md/);
   assert.match(plan, /roadmap pointer/i);

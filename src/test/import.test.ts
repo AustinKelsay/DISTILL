@@ -82,6 +82,22 @@ function writeFixtureFiles(root: string): void {
   writeFakeOpenCodeExecutable(root, [], {});
 }
 
+test("writeFakeOpenCodeExecutable replaces stale export fixtures between calls", () => {
+  withTempEnv((root) => {
+    writeFakeOpenCodeExecutable(root, [], {
+      stale_session: "{\"stale\":true}\n"
+    });
+    writeFakeOpenCodeExecutable(root, [], {
+      fresh_session: "{\"fresh\":true}\n"
+    });
+
+    assert.deepEqual(
+      fs.readdirSync(path.join(root, "opencode-exports")).sort(),
+      ["fresh_session.json"]
+    );
+  });
+});
+
 test("runImport bootstraps the database and records discovered captures", () => {
   withTempEnv((root) => {
     writeFixtureFiles(root);

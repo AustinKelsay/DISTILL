@@ -357,6 +357,12 @@ export function writeFakeOpenCodeExecutable(
   ensureDirectory(path.join(root, ".config", "opencode"));
   ensureDirectory(path.join(root, ".local", "state", "opencode"));
 
+  for (const entry of fs.readdirSync(exportDir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".json")) {
+      fs.unlinkSync(path.join(exportDir, entry.name));
+    }
+  }
+
   fs.writeFileSync(opencodeDbPath, "");
   fs.writeFileSync(dbQueryPath, typeof sessions === "string" ? sessions : JSON.stringify(sessions, null, 2));
   fs.writeFileSync(path.join(root, ".config", "opencode", "opencode.json"), "{}\n");

@@ -267,6 +267,7 @@ function loadSessionLabels(db: DatabaseSync, sessionIds: number[]): Map<number, 
     FROM label_assignments la
     JOIN labels l ON l.id = la.label_id
     WHERE la.object_type = 'session'
+    AND la.origin = 'manual'
     AND la.object_id IN (${placeholders})
     ORDER BY la.object_id ASC, l.name ASC
   `).all(...sessionIds) as SessionLabelLookupRow[];
@@ -423,6 +424,7 @@ export function getSessionDetail(sessionId: number): SessionDetail | undefined {
         JOIN labels l ON l.id = la.label_id
         WHERE la.object_type = 'session'
         AND la.object_id = ?
+        AND la.origin = 'manual'
         ORDER BY l.name ASC
       `)
       .all(sessionId) as SessionLabelRow[];

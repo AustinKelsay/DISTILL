@@ -73,6 +73,8 @@ Session detail must support:
 - manual tags
 - artifacts
 
+Current query read models must ignore non-manual label assignments even if future-origin rows exist in storage.
+
 ## Manual Tags
 
 Current normative behavior:

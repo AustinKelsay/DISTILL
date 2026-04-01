@@ -487,6 +487,81 @@ test("query layer includes workflow state and labels on search results for revie
   });
 });
 
+test("query layer ignores non-manual label assignments in list, detail, and search read models", () => {
+  withTempDistill(() => {
+    const distillDb = openDistillDatabase();
+    const db = distillDb.db;
+
+    db.prepare(`
+      INSERT INTO sources (id, kind, display_name, install_status, detected_at, metadata_json)
+      VALUES (1, 'codex', 'Codex', 'installed', '2026-03-25T00:00:00Z', '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO sessions (
+        id, source_id, external_session_id, title, project_path, updated_at,
+        message_count, raw_capture_count, metadata_json
+      ) VALUES (141, 1, 'session-manual-only', 'Manual labels only', '/tmp/demo', '2026-03-25T18:10:00Z', 1, 1, '{}')
+    `).run();
+
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, ordinal, role, text, text_hash, created_at, message_kind, metadata_json
+      ) VALUES
+      (411, 141, 1, 'user', 'Filter label origins in the query layer.', 'hash-manual-only', '2026-03-25T18:10:00Z', 'text', '{}')
+    `).run();
+
+    distillDb.close();
+
+    ensureDefaultLabels();
+
+    const labelDb = openDistillDatabase();
+    try {
+      const labelRows = labelDb.db.prepare(`
+        SELECT id, name
+        FROM labels
+        WHERE name IN ('favorite', 'sensitive', 'train')
+        ORDER BY name ASC
+      `).all() as Array<{ id: number; name: string }>;
+      const insertAssignment = labelDb.db.prepare(`
+        INSERT INTO label_assignments (object_type, object_id, label_id, origin)
+        VALUES ('session', 141, ?, ?)
+      `);
+
+      for (const label of labelRows) {
+        const origin =
+          label.name === "train"
+            ? "manual"
+            : label.name === "sensitive"
+              ? "auto_rule"
+              : "model";
+        insertAssignment.run(label.id, origin);
+      }
+    } finally {
+      labelDb.close();
+    }
+
+    const session = listRecentSessions().find((entry) => entry.id === 141);
+    const detail = getSessionDetail(141);
+    const result = searchSessions("label origins")[0];
+
+    assert.ok(detail);
+    assert.ok(result);
+    assert.deepEqual(session?.labels, ["train"]);
+    assert.equal(session?.workflowState, "train_ready");
+    assert.deepEqual(detail.labels, [
+      {
+        id: detail.labels[0]?.id,
+        name: "train",
+        scope: "session",
+        origin: "manual"
+      }
+    ]);
+    assert.deepEqual(result.labels, ["train"]);
+    assert.equal(result.workflowState, "train_ready");
+  });
+});
+
 test("query layer returns artifact summaries for session detail", () => {
   withTempDistill(() => {
     const distillDb = openDistillDatabase();
