@@ -1,4 +1,5 @@
 # DISTILL
+Data Infrastructure for Storing, Tagging, Indexing, and Labeling Locally
 
 DISTILL is a local-first desktop app for collecting, normalizing, searching, curating, and exporting local LLM chat history.
 
