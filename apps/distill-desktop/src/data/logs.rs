@@ -59,14 +59,28 @@ impl DesktopDataSource {
             return Ok(LogsPageVm {
                 rows: Vec::new(),
                 detail: LogDetailVm {
-                    empty_message:
-                        "Open a compatible Distill Electron database to inspect sync and export history."
-                            .to_string(),
+                    empty_message: match self.source_mode() {
+                        crate::config::SourceMode::RustOwned => {
+                            "Initialize or import into a Rust-owned Distill store to inspect sync and export history."
+                                .to_string()
+                        }
+                        crate::config::SourceMode::ElectronCompatReadOnly => {
+                            "Open a compatible Distill Electron database to inspect sync and export history."
+                                .to_string()
+                        }
+                    },
                     ..LogDetailVm::default()
                 },
                 empty_title: "No log history".to_string(),
-                empty_message:
-                    "This starter only reads from an existing Distill Electron home.".to_string(),
+                empty_message: match self.source_mode() {
+                    crate::config::SourceMode::RustOwned => {
+                        "The Rust-owned Distill store has not been initialized yet.".to_string()
+                    }
+                    crate::config::SourceMode::ElectronCompatReadOnly => {
+                        "This starter only reads from an existing Distill Electron home."
+                            .to_string()
+                    }
+                },
             });
         }
 
@@ -115,8 +129,16 @@ impl DesktopDataSource {
             if query.trim().is_empty() && matches!(filter, LogFilter::All) {
                 (
                     "No logs yet".to_string(),
-                    "Sync jobs and exports from Distill Electron will appear here when present."
-                        .to_string(),
+                    match self.source_mode() {
+                        crate::config::SourceMode::RustOwned => {
+                            "Sync jobs and exports from the Rust-owned Distill store will appear here when present."
+                                .to_string()
+                        }
+                        crate::config::SourceMode::ElectronCompatReadOnly => {
+                            "Sync jobs and exports from Distill Electron will appear here when present."
+                                .to_string()
+                        }
+                    },
                 )
             } else {
                 (

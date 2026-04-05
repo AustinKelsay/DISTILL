@@ -16,6 +16,9 @@ This matrix answers:
 
 Current executable Rust coverage is limited to scaffold behavior:
 
+- runtime config and mode resolution
+- Rust-owned store initialization and schema migration
+- source and label seed bootstrapping
 - read-only shell boot
 - session read-model rendering against fixture data
 - log filtering reads
@@ -23,7 +26,7 @@ Current executable Rust coverage is limited to scaffold behavior:
 - stale-selection controller regressions
 - read-only safety for compatibility-mode access
 
-This is necessary scaffolding coverage, not product parity coverage.
+This is still foundational coverage, not product parity coverage.
 
 ## Phase Mapping
 
@@ -56,6 +59,16 @@ The Rust app should add its own executable suites in roughly this order:
 10. `sync_jobs_and_logs`
 11. `compatibility_migration`
 12. `desktop_ui_smoke`
+
+## Phase 1 Status
+
+Phase 1 foundations now have initial executable coverage for:
+
+- runtime mode selection
+- Rust-owned schema initialization
+- seed bootstrapping
+- Electron compatibility read safety
+- backend-neutral read-model boot in both modes
 
 ## Minimum Scenarios Per Phase
 

@@ -1,6 +1,9 @@
 mod app;
+mod compat;
+mod config;
 mod controller;
 mod data;
+mod storage;
 mod view_models;
 
 slint::include_modules!();

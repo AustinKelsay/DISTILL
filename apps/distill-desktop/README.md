@@ -2,20 +2,23 @@
 
 `distill-desktop` is the native Rust starter for the Distill desktop rebuild.
 
-The current starter is intentionally desktop-first and read-only:
+The current starter is intentionally desktop-first and engine-first:
 
 - native shell built with `Slint` on the `winit` backend
-- reads an existing Distill Electron home in compatibility mode
+- defaults to a Rust-owned Distill home and schema
+- can open an existing Distill Electron home in explicit compatibility mode
 - renders `Sessions`, `Logs`, and `DB` workbench views
-- keeps all writes out of the Electron data directory
+- keeps all writes out of the Electron data directory in compatibility mode
 
 Planning and parity docs for the rebuild live under `docs/`.
 
 ## Current Scope
 
 - macOS and Linux are first-class targets
-- the shell defaults to `~/.distill-electron`
-- override the source home with `DISTILL_ELECTRON_HOME=/path/to/home`
+- the shell defaults to a Rust-owned app home under your local app data directory
+- override the Rust app home with `DISTILL_DESKTOP_HOME=/path/to/home`
+- switch to Electron compatibility mode with `DISTILL_SOURCE_MODE=electron_compat`
+- override the Electron home with `DISTILL_ELECTRON_HOME=/path/to/.distill-electron`
 - shell preferences are stored separately from the Electron app data
 - write flows such as import, export mutation, and label/tag edits are not wired yet
 
@@ -40,10 +43,10 @@ Run the desktop shell:
 cargo run -p distill-desktop
 ```
 
-Run against a specific Distill Electron home:
+Run in Electron compatibility mode against a specific Distill Electron home:
 
 ```bash
-DISTILL_ELECTRON_HOME="$HOME/.distill-electron" cargo run -p distill-desktop
+DISTILL_SOURCE_MODE=electron_compat DISTILL_ELECTRON_HOME="$HOME/.distill-electron" cargo run -p distill-desktop
 ```
 
 Validate the starter:

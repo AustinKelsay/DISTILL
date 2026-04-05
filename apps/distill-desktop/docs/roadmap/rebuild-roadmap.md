@@ -72,6 +72,13 @@ Acceptance:
 - Rust can open an existing Electron home in compatibility mode
 - read/write boundaries are explicit and tested
 
+Chosen defaults for Phase 1:
+
+- Rust-owned home is the default runtime mode
+- Electron access remains explicit compatibility mode
+- schema version `1` mirrors the current Electron canonical table and trigger names
+- file-based preferences remain outside the database for now
+
 ## Phase 2: Connectors And Discovery
 
 Goal:

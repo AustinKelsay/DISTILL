@@ -1,3 +1,4 @@
+use crate::data::{DbBrowseRequestVm, DesktopDataSource};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -5,10 +6,9 @@ use std::rc::Rc;
 use anyhow::{Context, Result};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use crate::data::{DbBrowseRequestVm, DesktopDataSource};
 use crate::view_models::{
-    AppRoute, AppSnapshotVm, DataSourceConfig, DbBrowseVm, DbExplorerVm, DbQueryVm, DbResultRowVm,
-    DbTableVm, LogCardVm, LogDetailVm, LogFilter, SessionDetailVm, SessionLane, SessionListRowVm,
+    AppRoute, AppSnapshotVm, DbBrowseVm, DbExplorerVm, DbQueryVm, DbResultRowVm, DbTableVm,
+    LogCardVm, LogDetailVm, LogFilter, SessionDetailVm, SessionLane, SessionListRowVm,
 };
 use crate::{
     AppWindow, ArtifactRowData, DbResultRowData, DbStore, KeyValueRowData, LogRowData, LogsStore,
@@ -218,13 +218,13 @@ pub struct DesktopController {
 impl DesktopController {
     pub fn new(
         window: &AppWindow,
-        source_config: DataSourceConfig,
+        source: DesktopDataSource,
         prefs_path: PathBuf,
     ) -> Rc<RefCell<Self>> {
         let prefs = load_preferences(&prefs_path).unwrap_or_default();
         let controller = Rc::new(RefCell::new(Self {
             window: window.clone_strong(),
-            source: DesktopDataSource::new(source_config),
+            source,
             state: AppState::from_prefs(prefs),
             prefs_path,
         }));
@@ -650,7 +650,7 @@ impl DesktopController {
         let data_path = if self.state.snapshot.database_exists {
             self.state.snapshot.database_path.display().to_string()
         } else {
-            self.state.snapshot.distill_home.display().to_string()
+            self.state.snapshot.home_path.display().to_string()
         };
 
         self.window.set_active_route(self.state.route.as_index());

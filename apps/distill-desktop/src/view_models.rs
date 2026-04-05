@@ -118,20 +118,8 @@ impl LogFilter {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct DataSourceConfig {
-    pub distill_home: PathBuf,
-    pub mode: DataSourceMode,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DataSourceMode {
-    #[default]
-    ElectronCompatReadOnly,
-}
-
-#[derive(Clone, Debug, Default)]
 pub struct AppSnapshotVm {
-    pub distill_home: PathBuf,
+    pub home_path: std::path::PathBuf,
     pub database_path: PathBuf,
     pub database_exists: bool,
     pub source_mode_label: String,

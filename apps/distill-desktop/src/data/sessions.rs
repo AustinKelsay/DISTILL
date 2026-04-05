@@ -90,11 +90,26 @@ impl DesktopDataSource {
         if !self.database_exists() {
             return Ok(SessionsPageVm {
                 rows: Vec::new(),
-                empty_title: "No Distill data yet".to_string(),
-                empty_message: format!(
-                    "Expected a read-only Distill Electron database at {}.",
-                    self.database_path().display()
-                ),
+                empty_title: match self.source_mode() {
+                    crate::config::SourceMode::RustOwned => "Rust store unavailable".to_string(),
+                    crate::config::SourceMode::ElectronCompatReadOnly => {
+                        "No Distill data yet".to_string()
+                    }
+                },
+                empty_message: match self.source_mode() {
+                    crate::config::SourceMode::RustOwned => {
+                        format!(
+                            "Expected a Rust-owned Distill database at {}.",
+                            self.database_path().display()
+                        )
+                    }
+                    crate::config::SourceMode::ElectronCompatReadOnly => {
+                        format!(
+                            "Expected a read-only Distill Electron database at {}.",
+                            self.database_path().display()
+                        )
+                    }
+                },
             });
         }
 
@@ -121,7 +136,16 @@ impl DesktopDataSource {
             if query.trim().is_empty() {
                 (
                     format!("No sessions in {}", lane.label()),
-                    "Import data in Distill Electron, then reopen this desktop shell.".to_string(),
+                    match self.source_mode() {
+                        crate::config::SourceMode::RustOwned => {
+                            "Import or sync data into the Rust-owned Distill store to populate this view."
+                                .to_string()
+                        }
+                        crate::config::SourceMode::ElectronCompatReadOnly => {
+                            "Import data in Distill Electron, then reopen this desktop shell."
+                                .to_string()
+                        }
+                    },
                 )
             } else {
                 (
@@ -144,9 +168,16 @@ impl DesktopDataSource {
         if !self.database_exists() {
             return Ok(SessionDetailVm {
                 empty_title: "No session selected".to_string(),
-                empty_message:
-                    "The desktop shell has not found a compatible Distill Electron database yet."
-                        .to_string(),
+                empty_message: match self.source_mode() {
+                    crate::config::SourceMode::RustOwned => {
+                        "The desktop shell has not initialized a Rust-owned Distill database yet."
+                            .to_string()
+                    }
+                    crate::config::SourceMode::ElectronCompatReadOnly => {
+                        "The desktop shell has not found a compatible Distill Electron database yet."
+                            .to_string()
+                    }
+                },
                 ..SessionDetailVm::default()
             });
         }

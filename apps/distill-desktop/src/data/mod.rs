@@ -3,14 +3,17 @@ mod logs;
 mod sessions;
 mod sql_guard;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use rusqlite::Connection;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
-use crate::view_models::{AppSnapshotVm, DataSourceConfig, DataSourceMode, KeyValueRowVm};
+use crate::compat::ElectronCompatStore;
+use crate::config::{DesktopRuntimeConfig, SourceMode};
+use crate::storage::RustStore;
+use crate::view_models::{AppSnapshotVm, KeyValueRowVm};
 
 pub use sql_guard::guard_read_only_sql;
 
@@ -32,8 +35,15 @@ pub(super) const FILTER_OPERATORS: [&str; 13] = [
 ];
 
 #[derive(Clone, Debug)]
+pub enum DesktopBackend {
+    RustOwned(RustStore),
+    ElectronCompat(ElectronCompatStore),
+}
+
+#[derive(Clone, Debug)]
 pub struct DesktopDataSource {
-    pub config: DataSourceConfig,
+    runtime: DesktopRuntimeConfig,
+    backend: DesktopBackend,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -48,39 +58,75 @@ pub struct DbBrowseRequestVm {
 }
 
 impl DesktopDataSource {
-    pub fn new(config: DataSourceConfig) -> Self {
-        Self { config }
+    pub fn new(runtime: DesktopRuntimeConfig) -> Result<Self> {
+        let backend = match runtime.source_mode {
+            SourceMode::RustOwned => {
+                DesktopBackend::RustOwned(RustStore::initialize(runtime.app_paths.clone())?)
+            }
+            SourceMode::ElectronCompatReadOnly => {
+                let home = runtime
+                    .electron_home
+                    .clone()
+                    .context("electron compatibility mode requires an Electron home path")?;
+                DesktopBackend::ElectronCompat(ElectronCompatStore::new(home))
+            }
+        };
+
+        Ok(Self { runtime, backend })
+    }
+
+    pub fn source_mode(&self) -> SourceMode {
+        self.runtime.source_mode
+    }
+
+    pub fn home_path(&self) -> &Path {
+        match &self.backend {
+            DesktopBackend::RustOwned(store) => store.app_home(),
+            DesktopBackend::ElectronCompat(store) => store.home_path(),
+        }
     }
 
     pub fn database_path(&self) -> PathBuf {
-        self.config.distill_home.join("distill-electron.db")
+        match &self.backend {
+            DesktopBackend::RustOwned(store) => store.database_path().to_path_buf(),
+            DesktopBackend::ElectronCompat(store) => store.database_path(),
+        }
     }
 
     pub fn database_exists(&self) -> bool {
-        self.database_path().exists()
+        match &self.backend {
+            DesktopBackend::RustOwned(store) => store.database_exists(),
+            DesktopBackend::ElectronCompat(store) => store.database_exists(),
+        }
     }
 
     pub fn app_snapshot(&self) -> Result<AppSnapshotVm> {
         let database_path = self.database_path();
         let mut snapshot = AppSnapshotVm {
-            distill_home: self.config.distill_home.clone(),
+            home_path: self.home_path().to_path_buf(),
             database_path: database_path.clone(),
-            database_exists: database_path.exists(),
-            source_mode_label: match self.config.mode {
-                DataSourceMode::ElectronCompatReadOnly => {
-                    "Electron Compatibility / Read Only".to_string()
-                }
+            database_exists: self.database_exists(),
+            source_mode_label: self.source_mode().label().to_string(),
+            source_badge_text: self.source_mode().badge_text().to_string(),
+            app_status_text: match self.source_mode() {
+                SourceMode::RustOwned => "Rust-owned store ready".to_string(),
+                SourceMode::ElectronCompatReadOnly => "Read-only compatibility mode".to_string(),
             },
-            source_badge_text: "Desktop Native Shell".to_string(),
-            app_status_text: "Read-only compatibility mode".to_string(),
             ..AppSnapshotVm::default()
         };
 
         if !snapshot.database_exists {
-            snapshot.app_status_text = format!(
-                "Waiting for Distill Electron data at {}",
-                database_path.display()
-            );
+            snapshot.app_status_text = match self.source_mode() {
+                SourceMode::RustOwned => {
+                    format!("Rust store missing at {}", database_path.display())
+                }
+                SourceMode::ElectronCompatReadOnly => {
+                    format!(
+                        "Waiting for Distill Electron data at {}",
+                        database_path.display()
+                    )
+                }
+            };
             return Ok(snapshot);
         }
 
@@ -99,13 +145,10 @@ impl DesktopDataSource {
     }
 
     pub(super) fn open_read_only(&self) -> Result<Connection> {
-        let path = self.database_path();
-        let connection = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .with_context(|| format!("failed to open SQLite database at {}", path.display()))?;
-        Ok(connection)
+        match &self.backend {
+            DesktopBackend::RustOwned(store) => store.open_read_only(),
+            DesktopBackend::ElectronCompat(store) => store.open_read_only(),
+        }
     }
 
     pub(super) fn scalar_count(&self, conn: &Connection, sql: &str) -> Result<usize> {
@@ -256,10 +299,11 @@ pub(super) fn truncate_inline(value: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AppPaths, DesktopRuntimeConfig};
+    use crate::view_models::{LogFilter, SessionLane};
+    use rusqlite::Connection;
     use std::fs;
     use std::path::Path;
-
-    use rusqlite::Connection;
     use tempfile::tempdir;
 
     fn fixture_home() -> tempfile::TempDir {
@@ -340,31 +384,54 @@ mod tests {
         tmp
     }
 
-    fn source(home: &Path) -> DesktopDataSource {
-        DesktopDataSource::new(DataSourceConfig {
-            distill_home: home.to_path_buf(),
-            mode: DataSourceMode::ElectronCompatReadOnly,
+    fn temp_paths(root: &Path) -> AppPaths {
+        let app_home = root.join("distill-desktop");
+        AppPaths {
+            db_path: app_home.join("distill.db"),
+            blobs_dir: app_home.join("blobs"),
+            prefs_path: app_home.join("preferences.json"),
+            app_home,
+        }
+    }
+
+    fn electron_source(home: &Path) -> DesktopDataSource {
+        DesktopDataSource::new(DesktopRuntimeConfig {
+            app_paths: temp_paths(home),
+            source_mode: SourceMode::ElectronCompatReadOnly,
+            electron_home: Some(home.to_path_buf()),
         })
+        .unwrap()
+    }
+
+    fn rust_source(root: &Path) -> (DesktopDataSource, AppPaths) {
+        let app_paths = temp_paths(root);
+        let source = DesktopDataSource::new(DesktopRuntimeConfig {
+            app_paths: app_paths.clone(),
+            source_mode: SourceMode::RustOwned,
+            electron_home: None,
+        })
+        .unwrap();
+        (source, app_paths)
     }
 
     #[test]
     fn boot_snapshot_reads_fixture_database() {
         let home = fixture_home();
-        let snapshot = source(home.path()).app_snapshot().unwrap();
+        let snapshot = electron_source(home.path()).app_snapshot().unwrap();
         assert!(snapshot.database_exists);
         assert_eq!(snapshot.session_count, 1);
         assert!(snapshot.table_count > 0);
+        assert_eq!(
+            snapshot.source_mode_label,
+            "Electron Compatibility / Read Only"
+        );
     }
 
     #[test]
     fn sessions_lane_and_search_queries_work() {
         let home = fixture_home();
-        let sessions = source(home.path())
-            .load_sessions(
-                crate::view_models::SessionLane::TrainReady,
-                "pipeline",
-                None,
-            )
+        let sessions = electron_source(home.path())
+            .load_sessions(SessionLane::TrainReady, "pipeline", None)
             .unwrap();
         assert_eq!(sessions.rows.len(), 1);
         assert_eq!(sessions.rows[0].workflow_label, "Train Ready");
@@ -373,7 +440,7 @@ mod tests {
     #[test]
     fn session_detail_renders_transcript_and_artifacts() {
         let home = fixture_home();
-        let detail = source(home.path()).load_session_detail(1).unwrap();
+        let detail = electron_source(home.path()).load_session_detail(1).unwrap();
         assert_eq!(detail.title, "Search Pipeline");
         assert_eq!(detail.transcript_rows.len(), 3);
         assert_eq!(detail.artifact_rows.len(), 1);
@@ -383,8 +450,8 @@ mod tests {
     #[test]
     fn logs_filtering_works() {
         let home = fixture_home();
-        let logs = source(home.path())
-            .load_logs(crate::view_models::LogFilter::Sync, "", None)
+        let logs = electron_source(home.path())
+            .load_logs(LogFilter::Sync, "", None)
             .unwrap();
         assert_eq!(logs.rows.len(), 1);
         assert!(logs.detail.summary.contains("Sync"));
@@ -393,7 +460,7 @@ mod tests {
     #[test]
     fn db_browse_and_query_are_read_only() {
         let home = fixture_home();
-        let db = source(home.path());
+        let db = electron_source(home.path());
         let browse = db
             .browse_db_table(DbBrowseRequestVm {
                 table_name: "sessions".to_string(),
@@ -417,16 +484,50 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect::<Vec<_>>();
-        let db = source(home.path());
+        let db = electron_source(home.path());
         db.app_snapshot().unwrap();
-        db.load_sessions(crate::view_models::SessionLane::All, "", None)
-            .unwrap();
+        db.load_sessions(SessionLane::All, "", None).unwrap();
         db.run_read_only_query("SELECT * FROM sessions").unwrap();
         let after = fs::read_dir(home.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect::<Vec<_>>();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn rust_mode_initializes_store_and_empty_views() {
+        let root = tempdir().unwrap();
+        let (db, app_paths) = rust_source(root.path());
+        let snapshot = db.app_snapshot().unwrap();
+        assert_eq!(snapshot.source_mode_label, "Rust-Owned / Writable");
+        assert!(snapshot.database_exists);
+        assert_eq!(snapshot.session_count, 0);
+        assert!(app_paths.db_path.exists());
+        assert!(app_paths.blobs_dir.exists());
+
+        let sessions = db.load_sessions(SessionLane::All, "", None).unwrap();
+        assert!(sessions.rows.is_empty());
+        assert_eq!(sessions.empty_title, "No sessions in All");
+
+        let browse = db
+            .browse_db_table(DbBrowseRequestVm {
+                table_name: "sources".to_string(),
+                page: 1,
+                ..DbBrowseRequestVm::default()
+            })
+            .unwrap();
+        assert!(!browse.rows.is_empty());
+    }
+
+    #[test]
+    fn rust_mode_query_guard_still_rejects_mutation() {
+        let root = tempdir().unwrap();
+        let (db, _) = rust_source(root.path());
+        assert!(
+            db.run_read_only_query("UPDATE sessions SET title = 'x'")
+                .is_err()
+        );
     }
 
     #[test]
