@@ -1,0 +1,197 @@
+import { Button, LineEdit, VerticalBox } from "std-widgets.slint";
+import { NavItemData, NavTile, ToneChip } from "components.slint";
+import { DbPane } from "db_pane.slint";
+import { LogsPane } from "logs_pane.slint";
+import { SessionsPane } from "sessions_pane.slint";
+
+export {
+    ArtifactRowData,
+    DbResultRowData,
+    KeyValueRowData,
+    LogRowData,
+    NavItemData,
+    SessionLaneData,
+    SessionListRowData,
+    TableRowData,
+    TranscriptRowData
+} from "components.slint";
+export { DbStore } from "db_pane.slint";
+export { LogsStore } from "logs_pane.slint";
+export { SessionsStore } from "sessions_pane.slint";
+
+export component AppWindow inherits Window {
+    title: "Distill Desktop";
+    preferred-width: 1520px;
+    preferred-height: 960px;
+    min-width: 1180px;
+    min-height: 760px;
+    background: #f5f7fb;
+
+    in-out property <int> active_route: 0;
+    in-out property <length> sessions_list_width: 380px;
+    in-out property <length> logs_list_width: 420px;
+    in-out property <length> db_tables_width: 240px;
+    in-out property <length> db_rows_width: 420px;
+    in-out property <string> global_search;
+
+    in property <string> app_status_text;
+    in property <string> source_badge_text;
+    in property <string> source_mode_text;
+    in property <string> data_path_text;
+    in property <[NavItemData]> nav_items;
+
+    callback nav_selected(int);
+    callback reload_requested();
+    callback settings_requested();
+    callback global_search_edited(string);
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #f5f7fb;
+
+        Rectangle {
+            x: 16px;
+            y: 16px;
+            width: parent.width - 32px;
+            height: 78px;
+            background: #ffffff;
+            border-radius: 24px;
+            border-width: 1px;
+            border-color: #dde4f0;
+
+            Text {
+                x: 20px;
+                y: 14px;
+                text: "Distill Desktop";
+                font-size: 22px;
+                font-weight: 700;
+                color: #1f2430;
+            }
+
+            Text {
+                x: 20px;
+                y: 44px;
+                text: root.source_mode_text;
+                font-size: 12px;
+                color: #70788b;
+            }
+
+            LineEdit {
+                x: 278px;
+                y: 19px;
+                width: 340px;
+                height: 40px;
+                text: root.global_search;
+                enabled: root.active_route != 2;
+                placeholder-text: root.active_route == 2 ? "Use DB filters or the SQL editor below." : "Search the current view";
+                edited(text) => {
+                    root.global_search = text;
+                    root.global_search_edited(text);
+                }
+            }
+
+            ToneChip {
+                x: 634px;
+                y: 25px;
+                text: root.source_badge_text;
+                background_color: #edf2ff;
+                foreground_color: #29497f;
+            }
+
+            Button {
+                x: parent.width - 520px;
+                y: 19px;
+                width: 90px;
+                height: 40px;
+                text: "Reload";
+                clicked => { root.reload_requested(); }
+            }
+
+            Button {
+                x: parent.width - 416px;
+                y: 19px;
+                width: 96px;
+                height: 40px;
+                text: "Settings";
+                clicked => { root.settings_requested(); }
+            }
+
+            Text {
+                x: parent.width - 300px;
+                y: 16px;
+                width: 280px;
+                text: root.app_status_text;
+                horizontal-alignment: right;
+                font-size: 13px;
+                font-weight: 600;
+                color: #1f2430;
+            }
+
+            Text {
+                x: parent.width - 300px;
+                y: 42px;
+                width: 280px;
+                text: root.data_path_text;
+                horizontal-alignment: right;
+                font-size: 11px;
+                color: #70788b;
+            }
+        }
+
+        Rectangle {
+            x: 16px;
+            y: 110px;
+            width: 116px;
+            height: parent.height - 126px;
+            background: #eef2f8;
+            border-radius: 28px;
+            border-width: 1px;
+            border-color: #dde4f0;
+
+            VerticalBox {
+                x: 12px;
+                y: 16px;
+                width: parent.width - 24px;
+                height: parent.height - 32px;
+                spacing: 12px;
+
+                for item[index] in root.nav_items : NavTile {
+                    label: item.label;
+                    selected: item.selected;
+                    clicked => { root.nav_selected(index); }
+                }
+            }
+        }
+
+        Rectangle {
+            x: 148px;
+            y: 110px;
+            width: parent.width - 164px;
+            height: parent.height - 126px;
+            background: transparent;
+
+            SessionsPane {
+                visible: root.active_route == 0;
+                width: parent.width;
+                height: parent.height;
+                list_width: root.sessions_list_width;
+            }
+
+            LogsPane {
+                visible: root.active_route == 1;
+                width: parent.width;
+                height: parent.height;
+                list_width: root.logs_list_width;
+            }
+
+            DbPane {
+                visible: root.active_route == 2;
+                width: parent.width;
+                height: parent.height;
+                tables_width: root.db_tables_width;
+                rows_width: root.db_rows_width;
+            }
+        }
+    }
+}
