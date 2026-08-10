@@ -1,20 +1,17 @@
-# Distill 0.2.0-beta.2
+# Distill 0.2.0-beta.3
 
-This is the second beta release of the Rust-first Distill rebuild, following
-`v0.2.0-beta.1`.
+This is the third beta release of the Rust-first Distill rebuild, following
+`v0.2.0-beta.2`.
 
-## Scope delta over beta.1
+## Scope delta over beta.2
 
-- Add Pi as a first-class file-backed Source adapter (#56), bringing the v1 Source
-  set to six: Fixture, Codex, Claude Code, OpenCode, Droid, and Pi. Pi is
-  detected under a configured sessions root (file-backed, no executable required,
-  matching the Droid pattern); sync/parse replay is file-backed and never invokes a
-  provider subprocess. Discovery resolves session identity from the `session` header
-  line first, with deterministic filename-stem and synthetic fallbacks.
-- Enforce rebuild gates on main (#55): `.github/workflows/rebuild-ci.yml` runs the
-  core Rust and desktop rebuild commands on qualifying pull requests into `main`.
-- Windows MSI beta version mapping already carried by the tag (`0.2.0-2` → WiX
-  `0.2.0.2`), matching the beta.1 packaging convention.
+- Fix Pi Source detection to be file-backed without an executable gate. Pi
+  detection now requires only a configured sessions root (matching the Droid
+  pattern), not the `pi` CLI on PATH. The beta.2 release incorrectly required
+  the executable; this release removes that gate so Pi sessions are detected
+  and synced purely from file-backed JSONL.
+- Correct the second-beta release doc to reflect the file-backed detection
+  model.
 
 ## Product boundary (unchanged from beta.1)
 
@@ -59,9 +56,9 @@ The first-beta workflow intentionally builds an unsigned/ad-hoc macOS artifact;
 Developer ID signing, hardened runtime, notarization, and ticket stapling are a
 follow-up release gate rather than a beta claim. Windows installers are
 build-verified but have no automated UI smoke claim in beta. The Windows MSI uses
-the platform-only numeric Tauri version `0.2.0-2`, which WiX maps to package
-version `0.2.0.2`; the release tag, release metadata, and artifact names
-remain the canonical `0.2.0-beta.2` beta version. This mapping is kept in
+the platform-only numeric Tauri version `0.2.0-3`, which WiX maps to package
+version `0.2.0.3`; the release tag, release metadata, and artifact names
+remain the canonical `0.2.0-beta.3` beta version. This mapping is kept in
 `tauri.windows.beta.conf.json` and enforced by `npm run release:check`.
 Screen-reader speech, live-user-home migration, and host-installed provider
 behavior remain human or out-of-scope validation gates.
